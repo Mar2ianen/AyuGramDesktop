@@ -54,6 +54,8 @@ rpl::producer<TextWithEntities> Text2() {
 		tr::marked);
 }
 
+QString telegramFaqLink();
+
 rpl::producer<TextWithEntities> Text3() {
 	return tr::lng_about_text3(
 		lt_faq_link,
@@ -311,4 +313,3 @@ void ArchiveHintBox(
 		box->addButton(std::move(button));
 	}
 }
-
