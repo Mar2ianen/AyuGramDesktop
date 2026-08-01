@@ -8390,6 +8390,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_menu_formatting_subscript" = "Subscript";
 "lng_menu_formatting_superscript" = "Superscript";
 "lng_menu_formatting_marked" = "Marked";
+"lng_menu_formatting_plain_text" = "Plain text";
 "lng_article_menu_item" = "Article";
 "lng_article_editor_title" = "Article";
 "lng_article_editor_title_editing" = "Editing";
