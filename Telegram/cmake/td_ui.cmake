@@ -25,6 +25,7 @@ set(style_files
     ui/menu_icons.style
     ui/chat/chat.style
     ui/effects/credits.style
+    ui/effects/premium_limits.style
     ui/effects/premium.style
     ui/color_indices.style
     boxes/boxes.style
