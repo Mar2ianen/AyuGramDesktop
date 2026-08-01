@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "data/data_session.h"
 #include "data/stickers/data_stickers.h"
+#include "ayu/ayu_settings.h"
 #include "core/application.h"
 #include "base/options.h"
 #include "styles/style_chat_helpers.h"
@@ -36,7 +37,7 @@ base::options::toggle TabbedPanelShowOnClick({
 const char kOptionTabbedPanelShowOnClick[] = "tabbed-panel-show-on-click";
 
 bool ShowPanelOnClick() {
-	return TabbedPanelShowOnClick.value();
+	return !AyuSettings::getInstance().showEmojiPopup();
 }
 
 TabbedPanel::TabbedPanel(
@@ -488,7 +489,9 @@ void TabbedPanel::showStarted() {
 }
 
 bool TabbedPanel::eventFilter(QObject *obj, QEvent *e) {
-	if (TabbedPanelShowOnClick.value()) {
+	const auto &settings = AyuSettings::getInstance();
+
+	if (!settings.showEmojiPopup()) {
 		return false;
 	} else if (e->type() == QEvent::Enter) {
 		otherEnter();
