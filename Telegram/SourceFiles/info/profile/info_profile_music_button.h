@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "scheme.h"
-#include "data/data_msg_id.h"
 #include "ui/widgets/buttons.h"
 #include "ui/text/format_song_name.h"
 #include "ui/text/text.h"
@@ -23,7 +21,6 @@ struct MusicButtonData {
 	Ui::Text::FormatSongName name;
 	QString title;
 	QString performer;
-	FullMsgId msgId;
 	std::shared_ptr<Data::DocumentMedia> mediaView;
 };
 

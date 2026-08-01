@@ -42,7 +42,6 @@ namespace {
 		.name = name,
 		.title = name.composedName().title,
 		.performer = name.composedName().performer,
-		.msgId = message->fullId(),
 		.mediaView = document->createMediaView(),
 	};
 }
