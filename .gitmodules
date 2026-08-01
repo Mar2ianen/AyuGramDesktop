@@ -100,3 +100,7 @@
 [submodule "Telegram/ThirdParty/TooManyCooks"]
 	path = Telegram/ThirdParty/TooManyCooks
 	url = https://github.com/tzcnt/TooManyCooks.git
+
+[submodule "Telegram/lib_icu"]
+	path = Telegram/lib_icu
+	url = https://github.com/AyuGram/lib_icu.git
