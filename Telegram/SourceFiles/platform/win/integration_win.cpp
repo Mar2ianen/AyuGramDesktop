@@ -13,14 +13,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/sandbox.h"
 #include "lang/lang_keys.h"
 #include "platform/win/windows_app_user_model_id.h"
-#include "platform/win/windows_taskbar_buttons.h"
 #include "platform/win/tray_win.h"
 #include "platform/platform_integration.h"
 #include "platform/platform_specific.h"
-#include "mainwindow.h"
 #include "tray.h"
-#include "window/window_controller.h"
-
+#include "styles/style_window.h"
 
 #include <QtCore/QAbstractNativeEventFilter>
 #include <private/qguiapplication_p.h>
@@ -41,8 +38,6 @@ void WindowsIntegration::init() {
 	QCoreApplication::instance()->installNativeEventFilter(this);
 	_taskbarCreatedMsgId = RegisterWindowMessage(L"TaskbarButtonCreated");
 }
-
-WindowsIntegration::~WindowsIntegration() = default;
 
 ITaskbarList3 *WindowsIntegration::taskbarList() const {
 	return _taskbarList.get();
@@ -75,6 +70,38 @@ void WindowsIntegration::createCustomJumpList() {
 	}
 }
 
+void AddJumpListItem(IObjectCollection* collection, const QString& title, const QString& args, const QString& icon) {
+	auto shellLink = base::WinRT::TryCreateInstance<IShellLink>(CLSID_ShellLink);
+	if (!shellLink) {
+		return;
+	}
+
+	const auto exe = QDir::toNativeSeparators(cExeDir() + cExeName());
+	const auto dir = QDir::toNativeSeparators(QDir(cWorkingDir()).absolutePath());
+	shellLink->SetArguments(args.toStdWString().c_str());
+	shellLink->SetPath(exe.toStdWString().c_str());
+	shellLink->SetWorkingDirectory(dir.toStdWString().c_str());
+	shellLink->SetIconLocation(icon.toStdWString().c_str(), 0);
+
+	if (const auto propertyStore = shellLink.try_as<IPropertyStore>()) {
+		auto appIdPropVar = PROPVARIANT();
+		HRESULT hr = InitPropVariantFromString(AppUserModelId::Id().c_str(), &appIdPropVar);
+		if (SUCCEEDED(hr)) {
+			hr = propertyStore->SetValue(AppUserModelId::Key(), appIdPropVar);
+			PropVariantClear(&appIdPropVar);
+		}
+		auto titlePropVar = PROPVARIANT();
+		hr = InitPropVariantFromString(title.toStdWString().c_str(), &titlePropVar);
+		if (SUCCEEDED(hr)) {
+			hr = propertyStore->SetValue(PKEY_Title, titlePropVar);
+			PropVariantClear(&titlePropVar);
+		}
+		propertyStore->Commit();
+	}
+
+	collection->AddObject(shellLink.get());
+}
+
 void WindowsIntegration::refreshCustomJumpList() {
 	auto added = false;
 	auto maxSlots = UINT();
@@ -91,66 +118,20 @@ void WindowsIntegration::refreshCustomJumpList() {
 		}
 	});
 
-	auto shellLink = base::WinRT::TryCreateInstance<IShellLink>(
-		CLSID_ShellLink);
-	if (!shellLink) {
-		return;
-	}
-
-	// Set the path to your application and the command-line argument for quitting
-	const auto exe = QDir::toNativeSeparators(cExeDir() + cExeName());
-	const auto dir = QDir::toNativeSeparators(QDir(cWorkingDir()).absolutePath());
-	const auto icon = Tray::QuitJumpListIconPath();
-	shellLink->SetArguments(L"-quit");
-	shellLink->SetPath(exe.toStdWString().c_str());
-	shellLink->SetWorkingDirectory(dir.toStdWString().c_str());
-	shellLink->SetIconLocation(icon.toStdWString().c_str(), 0);
-
-	if (const auto propertyStore = shellLink.try_as<IPropertyStore>()) {
-		auto appIdPropVar = PROPVARIANT();
-		hr = InitPropVariantFromString(
-			AppUserModelId::Id().c_str(),
-			&appIdPropVar);
-		if (SUCCEEDED(hr)) {
-			hr = propertyStore->SetValue(
-				AppUserModelId::Key(),
-				appIdPropVar);
-			PropVariantClear(&appIdPropVar);
-		}
-		auto titlePropVar = PROPVARIANT();
-		hr = InitPropVariantFromString(
-			tr::lng_quit_from_tray(tr::now).toStdWString().c_str(),
-			&titlePropVar);
-		if (SUCCEEDED(hr)) {
-			hr = propertyStore->SetValue(PKEY_Title, titlePropVar);
-			PropVariantClear(&titlePropVar);
-		}
-		propertyStore->Commit();
-	}
-
 	auto collection = base::WinRT::TryCreateInstance<IObjectCollection>(
 		CLSID_EnumerableObjectCollection);
 	if (!collection) {
 		return;
 	}
-	collection->AddObject(shellLink.get());
+
+	// add "Enter with Ghost" item
+	AddJumpListItem(collection.get(), tr::ayu_GhostModeShortcut(tr::now), "-ghost", Tray::GhostJumpListIconPath());
+
+	// add "Quit" item
+	AddJumpListItem(collection.get(), tr::lng_quit_from_tray(tr::now), "-quit", Tray::QuitJumpListIconPath());
 
 	_jumpList->AddUserTasks(collection.get());
 	added = true;
-}
-
-void WindowsIntegration::setupTaskbarButtons(HWND window) {
-	const auto controller = Core::App().activePrimaryWindow();
-	if (!controller
-		|| reinterpret_cast<HWND>(controller->widget()->winId()) != window) {
-		return;
-	}
-	if (!_taskbarButtons || _taskbarButtons->window() != window) {
-		_taskbarButtons = std::make_unique<TaskbarButtons>(
-			_taskbarList.get(),
-			window);
-	}
-	_taskbarButtons->buttonsCreated();
 }
 
 bool WindowsIntegration::processEvent(
@@ -159,29 +140,17 @@ bool WindowsIntegration::processEvent(
 		WPARAM wParam,
 		LPARAM lParam,
 		LRESULT *result) {
-	if (msg && msg == _taskbarCreatedMsgId) {
-		if (!_taskbarList) {
-			_taskbarList = base::WinRT::TryCreateInstance<ITaskbarList3>(
-				CLSID_TaskbarList,
-				CLSCTX_ALL);
-			if (_taskbarList) {
-				createCustomJumpList();
-			}
-		}
+	if (msg && msg == _taskbarCreatedMsgId && !_taskbarList) {
+		_taskbarList = base::WinRT::TryCreateInstance<ITaskbarList3>(
+			CLSID_TaskbarList,
+			CLSCTX_ALL);
 		if (_taskbarList) {
-			setupTaskbarButtons(hWnd);
+			createCustomJumpList();
 		}
 	}
 
 	switch (msg) {
-	case WM_COMMAND:
-		if (HIWORD(wParam) == THBN_CLICKED && _taskbarButtons) {
-			_taskbarButtons->buttonClicked(LOWORD(wParam));
-		}
-		break;
-
 	case WM_ENDSESSION:
-		Core::Sandbox::NotifySystemShuttingDown();
 		Core::Quit();
 		break;
 
@@ -205,9 +174,6 @@ bool WindowsIntegration::processEvent(
 		Core::App().settings().setSystemDarkMode(Platform::IsDarkMode());
 #endif // Qt < 6.5.0
 		Core::App().tray().updateIconCounters();
-		if (_taskbarButtons) {
-			_taskbarButtons->refreshTheme();
-		}
 		if (_jumpList) {
 			refreshCustomJumpList();
 		}

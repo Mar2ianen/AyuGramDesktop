@@ -17,7 +17,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/win/base_windows_shlobj_h.h"
 #include "base/platform/win/base_windows_winrt.h"
 #include "base/call_delayed.h"
-#include "core/version.h"
 #include "ui/boxes/confirm_box.h"
 #include "lang/lang_keys.h"
 #include "mainwindow.h"
@@ -27,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "window/window_controller.h"
 #include "core/crash_reports.h"
-#include "core/version.h"
 
 #include <QtCore/QOperatingSystemVersion>
 #include <QtWidgets/QApplication>
@@ -322,10 +320,10 @@ void psDoFixPrevious() {
 		HRESULT userDesktopRes = SHGetFolderPath(0, CSIDL_DESKTOPDIRECTORY, 0, SHGFP_TYPE_CURRENT, userDesktopFolder);
 		HRESULT commonDesktopRes = SHGetFolderPath(0, CSIDL_COMMON_DESKTOPDIRECTORY, 0, SHGFP_TYPE_CURRENT, commonDesktopFolder);
 		if (SUCCEEDED(userDesktopRes)) {
-			userDesktopLnk = QString::fromWCharArray(userDesktopFolder) + "\\Telegram.lnk";
+			userDesktopLnk = QString::fromWCharArray(userDesktopFolder) + "\\AyuGram.lnk";
 		}
 		if (SUCCEEDED(commonDesktopRes)) {
-			commonDesktopLnk = QString::fromWCharArray(commonDesktopFolder) + "\\Telegram.lnk";
+			commonDesktopLnk = QString::fromWCharArray(commonDesktopFolder) + "\\AyuGram.lnk";
 		}
 		QFile userDesktopFile(userDesktopLnk), commonDesktopFile(commonDesktopLnk);
 		if (QFile::exists(userDesktopLnk) && QFile::exists(commonDesktopLnk) && userDesktopLnk != commonDesktopLnk) {
@@ -538,18 +536,6 @@ void ActivateOtherProcess(uint64 processId, uint64 windowId) {
 		::SetForegroundWindow(hwnd);
 		::SetFocus(hwnd);
 	}
-}
-
-bool WaitForProcessExit(uint64 processId, crl::time timeout) {
-	const auto process = ::OpenProcess(
-		SYNCHRONIZE,
-		FALSE,
-		DWORD(processId));
-	if (!process) {
-		return (::GetLastError() == ERROR_INVALID_PARAMETER);
-	}
-	const auto guard = gsl::finally([&] { ::CloseHandle(process); });
-	return (::WaitForSingleObject(process, DWORD(timeout)) == WAIT_OBJECT_0);
 }
 
 } // namespace Platform

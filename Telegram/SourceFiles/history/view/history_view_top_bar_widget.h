@@ -78,8 +78,6 @@ public:
 		ActiveChat activeChat,
 		SendActionPainter *sendAction);
 	void setCustomTitle(const QString &title);
-	void setTitleShownRatio(float64 shown);
-	[[nodiscard]] int titleLeft() const;
 
 	void showChooseMessagesForReport(Data::ReportInput reportInput);
 	void clearChooseMessagesForReport();
@@ -89,7 +87,6 @@ public:
 	void searchEnableChooseFromUser(bool enable, bool visible);
 	bool searchSetFocus();
 	[[nodiscard]] bool searchMode() const;
-	[[nodiscard]] rpl::producer<bool> searchModeChanges() const;
 	[[nodiscard]] bool searchHasFocus() const;
 	[[nodiscard]] rpl::producer<> searchCancelled() const;
 	[[nodiscard]] rpl::producer<> searchSubmitted() const;
@@ -107,6 +104,9 @@ public:
 	}
 	[[nodiscard]] rpl::producer<> deleteSelectionRequest() const {
 		return _deleteSelection.events();
+	}
+	[[nodiscard]] rpl::producer<> messageShotSelectionRequest() const {
+		return _messageShotSelection.events();
 	}
 	[[nodiscard]] rpl::producer<> clearSelectionRequest() const {
 		return _clearSelection.events();
@@ -140,13 +140,9 @@ private:
 	struct EmojiInteractionSeenAnimation;
 
 	[[nodiscard]] bool rootChatsListBar() const;
-	[[nodiscard]] bool communityChatsListBar() const;
 	void refreshInfoButton();
 	void refreshLang();
 	void updateSearchVisibility();
-	void updateSearchJumpToDateVisibility();
-	[[nodiscard]] bool searchJumpToDateFits() const;
-	void updateChooseFromUserGeometry();
 	void updateControlsGeometry();
 	void slideAnimationCallback();
 	void updateInfoToggleActive();
@@ -178,7 +174,6 @@ private:
 	void connectingAnimationCallback();
 
 	void paintTopBar(Painter &p);
-	[[nodiscard]] PeerData *titleNamePeer() const;
 	void paintStatus(
 		Painter &p,
 		int left,
@@ -223,7 +218,7 @@ private:
 	Ui::Animations::Simple _searchShown;
 
 	object_ptr<Ui::RoundButton> _clear;
-	object_ptr<Ui::RoundButton> _forward, _sendNow, _delete;
+	object_ptr<Ui::RoundButton> _forward, _sendNow, _delete, _messageShot;
 	object_ptr<Ui::InputField> _searchField = { nullptr };
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _chooseFromUser
 		= { nullptr };
@@ -235,7 +230,6 @@ private:
 	rpl::event_stream<> _searchSubmitted;
 	rpl::event_stream<> _jumpToDateRequests;
 	rpl::event_stream<> _chooseFromUserRequests;
-	rpl::event_stream<bool> _searchModeChanges;
 
 	object_ptr<Ui::IconButton> _back;
 	object_ptr<Ui::IconButton> _cancelChoose;
@@ -247,6 +241,8 @@ private:
 	object_ptr<Ui::IconButton> _search;
 	object_ptr<Ui::IconButton> _infoToggle;
 	object_ptr<Ui::IconButton> _menuToggle;
+	object_ptr<Ui::IconButton> _recentActions;
+	object_ptr<Ui::IconButton> _admins;
 	base::unique_qptr<Ui::PopupMenu> _menu;
 
 	object_ptr<RpWidget> _membersShowArea = { nullptr };
@@ -259,7 +255,6 @@ private:
 	bool _titlePeerTextOnline = false;
 	int _leftTaken = 0;
 	int _rightTaken = 0;
-	float64 _titleShownRatio = 1.;
 	bool _animatingMode = false;
 	std::unique_ptr<Ui::InfiniteRadialAnimation> _connecting;
 
@@ -271,6 +266,7 @@ private:
 	rpl::event_stream<> _forwardSelection;
 	rpl::event_stream<> _sendNowSelection;
 	rpl::event_stream<> _deleteSelection;
+	rpl::event_stream<> _messageShotSelection;
 	rpl::event_stream<> _clearSelection;
 	rpl::event_stream<> _cancelChooseForReport;
 

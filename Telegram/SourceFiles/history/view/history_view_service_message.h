@@ -56,10 +56,7 @@ public:
 
 	QRect innerGeometry() const override;
 
-	bool consumeHorizontalScroll(
-		QPoint position,
-		int delta,
-		Qt::ScrollPhase phase) override;
+	bool consumeHorizontalScroll(QPoint position, int delta) override;
 
 	void animateReaction(Ui::ReactionFlyAnimationArgs &&args) override;
 
@@ -124,12 +121,14 @@ public:
 		int left,
 		int width,
 		const Ui::Text::String &text,
-		const QRect &textRect);
+		const QRect &textRect,
+		int lastLineWidthAdd = 0);
 
 private:
 	static std::vector<int> CountLineWidths(
 		const Ui::Text::String &text,
-		const QRect &textRect);
+		const QRect &textRect,
+		int lastLineWidthAdd = 0);
 
 };
 

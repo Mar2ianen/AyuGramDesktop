@@ -27,10 +27,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "styles/style_chat.h"
-#include "styles/style_chat_style.h"
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
+
+// AyuGram includes
+#include "ayu/ui/ayu_userpic.h"
+
 
 namespace Settings {
 namespace {
@@ -746,10 +749,19 @@ void Preview::validateUserpicCache() {
 		|| _userpic.isEmpty()) {
 		return;
 	}
-	_userpicImage = Images::Circle(_userpicOriginal.scaled(
+	auto scaled = _userpicOriginal.scaled(
 		_userpic.size() * _ratio,
 		Qt::IgnoreAspectRatio,
-		Qt::SmoothTransformation));
+		Qt::SmoothTransformation);
+	if (AyuUserpic::IsCircle()) {
+		_userpicImage = Images::Circle(std::move(scaled));
+	} else {
+		const auto r = AyuUserpic::ComputeRadius(
+			std::min(scaled.width(), scaled.height()));
+		_userpicImage = Images::Round(
+			std::move(scaled),
+			Images::CornersMask(r));
+	}
 	_userpicImage.setDevicePixelRatio(_ratio);
 }
 

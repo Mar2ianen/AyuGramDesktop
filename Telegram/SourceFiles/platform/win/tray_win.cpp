@@ -10,7 +10,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/invoke_queued.h"
 #include "base/qt_signal_producer.h"
 #include "core/application.h"
-#include "core/version.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "storage/localstorage.h"
@@ -28,6 +27,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <private/qhighdpiscaling_p.h>
 #include <QSvgRenderer>
 #include <QBuffer>
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/ui/ayu_logo.h"
+#include "styles/style_ayu_icons.h"
+
 
 namespace Platform {
 
@@ -56,6 +61,23 @@ bool DarkTasbarValueValid/* = false*/;
 	}
 
 	return (value == 0);
+}
+
+[[nodiscard]] std::optional<bool> IsDarkTaskbar() {
+	static const auto kSystemVersion = QOperatingSystemVersion::current();
+	static const auto kDarkModeAddedVersion = QOperatingSystemVersion(
+		QOperatingSystemVersion::Windows,
+		10,
+		0,
+		18282);
+	static const auto kSupported = (kSystemVersion >= kDarkModeAddedVersion);
+	if (!kSupported) {
+		return std::nullopt;
+	} else if (!DarkTasbarValueValid) {
+		DarkTasbarValueValid = true;
+		DarkTaskbar = ReadDarkTaskbarValue();
+	}
+	return DarkTaskbar;
 }
 
 [[nodiscard]] QImage MonochromeIconFor(int size, bool darkMode) {
@@ -94,7 +116,7 @@ bool DarkTasbarValueValid/* = false*/;
 	p.setPen(Qt::NoPen);
 	p.drawEllipse(QRectF( // cx=3.9, cy=12.7, r=2.2
 		1.7 * xm,
-		10.5 * ym,
+		9.5 * ym,
 		4.4 * xm,
 		4.4 * ym));
 	return image;
@@ -109,6 +131,21 @@ bool DarkTasbarValueValid/* = false*/;
 	static auto ScaledLogoNoMargin = base::flat_map<int, QImage>();
 	static auto ScaledLogoDark = base::flat_map<int, QImage>();
 	static auto ScaledLogoLight = base::flat_map<int, QImage>();
+
+	static auto lastUsedIcon = AyuAssets::currentAppLogoName();
+
+	if (lastUsedIcon != AyuAssets::currentAppLogoName()) {
+		lastUsedIcon = AyuAssets::currentAppLogoName();
+		ScaledLogo = base::flat_map<int, QImage>();
+		ScaledLogoNoMargin = base::flat_map<int, QImage>();
+		ScaledLogoDark = base::flat_map<int, QImage>();
+		ScaledLogoLight = base::flat_map<int, QImage>();
+	}
+
+	const auto &settings = AyuSettings::getInstance();
+	if (settings.hideNotificationBadge()) {
+		args.count = 0;
+	}
 
 	const auto darkMode = IsDarkTaskbar();
 	auto &scaled = (monochrome && darkMode)
@@ -145,6 +182,7 @@ bool DarkTasbarValueValid/* = false*/;
 		return Window::WithSmallCounter(std::move(result), std::move(args));
 	}
 	QPainter p(&result);
+	PainterHighQualityEnabler hq(p); // AyuGram: fix for lq icons
 	const auto half = args.size / 2;
 	args.size = half;
 	p.drawPixmap(
@@ -255,7 +293,7 @@ void Tray::addAction(rpl::producer<QString> text, Fn<void()> &&callback) {
 		using namespace rpl::mappers;
 		_callbackFromTrayLifetime = _menu->shownValue(
 		) | rpl::filter(!_1) | rpl::take(1) | rpl::on_next([=] {
-			crl::on_main([=] { callback(); });
+			callback();
 		});
 	});
 
@@ -421,25 +459,28 @@ QString Tray::QuitJumpListIconPath() {
 	return path;
 }
 
-bool HasMonochromeSetting() {
-	return IsDarkTaskbar().has_value();
+QString Tray::GhostJumpListIconPath() {
+	const auto dark = IsDarkTaskbar();
+	const auto key = !dark ? 0 : *dark ? 1 : 2;
+	const auto path = cWorkingDir() + u"tdata/temp/ghost_%1.ico"_q.arg(key);
+	if (QFile::exists(path)) {
+		return path;
+	}
+	const auto color = !dark
+		? st::trayCounterBg->c
+		: *dark
+		? QColor(255, 255, 255)
+		: QColor(0, 0, 0, 228);
+	WriteIco(path, {
+		st::winEnterWithGuestIcon.instance(color, 100, true),
+		st::winEnterWithGuestIcon.instance(color, 200, true),
+		st::winEnterWithGuestIcon.instance(color, 300, true),
+	});
+	return path;
 }
 
-std::optional<bool> IsDarkTaskbar() {
-	static const auto kSystemVersion = QOperatingSystemVersion::current();
-	static const auto kDarkModeAddedVersion = QOperatingSystemVersion(
-		QOperatingSystemVersion::Windows,
-		10,
-		0,
-		18282);
-	static const auto kSupported = (kSystemVersion >= kDarkModeAddedVersion);
-	if (!kSupported) {
-		return std::nullopt;
-	} else if (!DarkTasbarValueValid) {
-		DarkTasbarValueValid = true;
-		DarkTaskbar = ReadDarkTaskbarValue();
-	}
-	return DarkTaskbar;
+bool HasMonochromeSetting() {
+	return IsDarkTaskbar().has_value();
 }
 
 void RefreshTaskbarThemeValue() {

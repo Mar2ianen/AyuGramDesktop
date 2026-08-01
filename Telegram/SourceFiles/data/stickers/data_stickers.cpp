@@ -40,7 +40,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Data {
 namespace {
 
-constexpr auto kPremiumToastDuration = 5 * crl::time(1000);
+constexpr auto kPremiumToastDuration = 3 * crl::time(1000);
 
 using SetFlag = StickersSetFlag;
 
@@ -1658,12 +1658,7 @@ not_null<StickersSet*> Stickers::feedSet(
 	const auto set = data.match([&](const auto &data) {
 		return feedSet(data.vset());
 	});
-	data.match([&](const MTPDstickerSetCovered &data) {
-		set->covers = StickersPack();
-		const auto cover = session().data().processDocument(data.vcover());
-		if (cover->sticker()) {
-			set->covers.push_back(cover);
-		}
+	data.match([](const MTPDstickerSetCovered &data) {
 	}, [&](const MTPDstickerSetNoCovered &data) {
 	}, [&](const MTPDstickerSetMultiCovered &data) {
 		feedSetCovers(set, data.vcovers().v);

@@ -61,7 +61,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "styles/style_chat_helpers.h" // defaultReportBox
 #include "styles/style_media_view.h"
-#include "styles/style_userpic_button.h"
+#include "styles/style_boxes.h" // UserpicButton
 
 #include <QtGui/QWindow>
 
@@ -264,7 +264,7 @@ void Controller::Unsupported::setup(not_null<PeerData*> peer) {
 
 	_button = std::make_unique<Ui::RoundButton>(
 		wrap,
-		tr::lng_update_telegram(),
+		tr::ayu_UpdateAyuGram(),
 		st::storiesUnsupportedUpdate);
 	_button->show();
 
@@ -2045,10 +2045,6 @@ Ui::Toast::Config PrepareTogglePinToast(
 					tr::now,
 					lt_count,
 					count))) },
-		.iconLottie = pin
-			? u"toast/pin"_q
-			: u"toast/unpin"_q,
-		.iconLottieSize = st::toastLottieIconSize,
 		.st = &st::storiesActionToast,
 		.duration = (pin
 			? Data::Stories::kInProfileToastDuration

@@ -29,6 +29,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 #include "styles/style_info.h"
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+
+
 namespace Info {
 
 TopBar::TopBar(
@@ -241,7 +245,6 @@ void TopBar::createSearchView(
 	});
 
 	_searchField = field;
-	field->customUpDown(true);
 	auto fieldWrap = Ui::CreateChild<Ui::FadeWrap<Ui::InputField>>(
 		wrap,
 		object_ptr<Ui::InputField>::fromRaw(field),
@@ -394,17 +397,10 @@ void TopBar::updateDefaultControlsGeometry(int newWidth) {
 		const auto y = _subtitle
 			? _st.titleWithSubtitlePosition.y()
 			: _st.titlePosition.y();
-		const auto available = std::max(newWidth - right - x, 0);
-		_title->entity()->resizeToWidth(available);
 		_title->moveToLeft(x, y, newWidth);
 		if (_subtitle) {
-			const auto subtitleX = _back
-				? _st.back.width
-				: _st.subtitlePosition.x();
-			_subtitle->entity()->resizeToWidth(
-				std::max(newWidth - right - subtitleX, 0));
 			_subtitle->moveToLeft(
-				subtitleX,
+				_back ? _st.back.width : _st.subtitlePosition.x(),
 				_st.subtitlePosition.y(),
 				newWidth);
 		}
@@ -521,6 +517,12 @@ void TopBar::updateControlsVisibility(anim::type animated) {
 }
 
 void TopBar::setStories(rpl::producer<Dialogs::Stories::Content> content) {
+	// AyuGram disableStories
+	const auto &settings = AyuSettings::getInstance();
+	if (settings.disableStories()) {
+		return;
+	}
+	
 	_storiesLifetime.destroy();
 	delete _storiesWrap.data();
 	if (content) {

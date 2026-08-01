@@ -20,7 +20,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "core/click_handler_types.h" // kDocumentFilenameTooltipProperty.
 #include "history/view/history_view_element.h"
-#include "history/view/history_view_message.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_transcribe_button.h"
 #include "history/view/media/history_view_media_common.h"
@@ -29,8 +28,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_lottie_custom_emoji.h"
 #include "ui/text/text_utilities.h"
 #include "ui/chat/chat_style.h"
-#include "ui/effects/voice_once_particles.h"
-#include "ui/paint/blobs.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
@@ -42,47 +39,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_transcribes.h"
 #include "apiwrap.h"
 #include "styles/style_chat.h"
-#include "styles/style_chat_style.h"
 #include "styles/style_dialogs.h"
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/features/message_shot/message_shot.h"
+
 
 namespace HistoryView {
 namespace {
 
 constexpr auto kAudioVoiceMsgUpdateView = crl::time(100);
-
-constexpr auto kVoiceBlobAlpha = 0.25;
-constexpr auto kVoiceBlobMaxSpeed = 2.5;
-constexpr auto kVoiceBlobLevelDuration = 100. + 500. * 0.33;
-constexpr auto kVoiceBlobMinorScale = 0.88;
-constexpr auto kVoiceBlobMajorScale = 0.85;
-constexpr auto kVoiceBlobIdleLevel = 0.45;
-
-[[nodiscard]] std::vector<Ui::Paint::Blobs::BlobData> VoicePlaybackBlobs() {
-	return {
-		{
-			.segmentsCount = 6,
-			.minScale = kVoiceBlobMinorScale,
-			.minRadius = float(st::msgVoicePlaybackMinorBlobMinRadius),
-			.maxRadius = float(st::msgVoicePlaybackMinorBlobMaxRadius),
-			.speedScale = 1.,
-			.alpha = kVoiceBlobAlpha,
-			.maxSpeed = kVoiceBlobMaxSpeed,
-		},
-		{
-			.segmentsCount = 8,
-			.minScale = kVoiceBlobMajorScale,
-			.minRadius = float(st::msgVoicePlaybackMajorBlobMinRadius),
-			.maxRadius = float(st::msgVoicePlaybackMajorBlobMaxRadius),
-			.speedScale = 1.,
-			.alpha = kVoiceBlobAlpha,
-			.maxSpeed = kVoiceBlobMaxSpeed,
-		},
-	};
-}
-
-[[nodiscard]] bool IsHostedInstantViewMedia(not_null<const Element*> parent) {
-	return parent->Get<InstantViewMediaRuntime>() != nullptr;
-}
 
 [[nodiscard]] QRect TTLRectFromInner(const QRect &inner) {
 	return QRect(
@@ -208,7 +175,7 @@ void FillThumbnailOverlay(
 }
 
 void FillWaveform(VoiceData *roundData) {
-	if (!roundData || !roundData->waveform.empty()) {
+	if (!roundData->waveform.empty()) {
 		return;
 	}
 	const auto &size = ::Media::Player::kWaveformSamplesCount;
@@ -232,8 +199,7 @@ void PaintWaveform(
 		int availableWidth,
 		float64 progress,
 		bool ttl,
-		float64 hoverProgress = -1,
-		Ui::WaveformParticles *ttlParticles = nullptr) {
+		float64 hoverProgress = -1) {
 	const auto wf = [&]() -> const VoiceWaveform* {
 		if (!voiceData) {
 			return nullptr;
@@ -269,9 +235,6 @@ void PaintWaveform(
 	const auto maxDelta = st::msgWaveformMax - st::msgWaveformMin;
 	p.setPen(Qt::NoPen);
 	auto hq = PainterHighQualityEnabler(p);
-	auto edgeTop = 0.;
-	auto edgeHeight = 0.;
-	auto edgeFound = false;
 	for (auto i = 0, barLeft = 0, sum = 0, maxValue = 0; i < wfSize; ++i) {
 		const auto value = wf ? wf->at(i) : 0;
 		if (sum + barCount < wfSize) {
@@ -289,11 +252,6 @@ void PaintWaveform(
 		const auto barHeight = st::msgWaveformMin + barValue;
 		const auto barTop = st::lineWidth + (st::msgWaveformMax - barValue) / 2.;
 
-		if (barLeft < activeWidth) {
-			edgeTop = barTop;
-			edgeHeight = barHeight;
-			edgeFound = true;
-		}
 		if ((barLeft < activeWidth) && (barLeft + barWidth > activeWidth)) {
 			const auto leftWidth = activeWidth - barLeft;
 			const auto rightWidth = barWidth - leftWidth;
@@ -325,16 +283,6 @@ void PaintWaveform(
 		barLeft += barWidth + st::msgWaveformSkip;
 
 		maxValue = (sum < (barCount + 1) / 2) ? 0 : value;
-	}
-	if (ttl && ttlParticles) {
-		const auto emitArea = (edgeFound && activeWidth < availableWidth)
-			? QRectF(
-				activeWidth - barWidth,
-				edgeTop,
-				barWidth * 2.,
-				edgeHeight)
-			: QRectF();
-		ttlParticles->paint(p, emitArea, active->c, 1.);
 	}
 }
 
@@ -381,10 +329,8 @@ Document::Document(
 		_tooltipFilename.setTooltipText(named->name.toString());
 	}
 
-	const auto media = _parent->data()->media();
 	if ((_data->isVoiceMessage() || isRound)
-		&& media
-		&& media->ttlSeconds()) {
+		&& _parent->data()->media()->ttlSeconds()) {
 		const auto fullId = _realParent->fullId();
 		if (_parent->delegate()->elementContext() == Context::TTLViewer) {
 			auto lifetime = std::make_shared<rpl::lifetime>();
@@ -398,7 +344,10 @@ Document::Document(
 			const auto &data = &_parent->data()->history()->owner();
 			_parent->data()->removeFromSharedMediaIndex();
 			setDocumentLinks(_data, realParent, [=] {
-				_openl = nullptr;
+				const auto &settings = AyuSettings::getInstance();
+				if (!settings.saveDeletedMessages()) {
+					_openl = nullptr;
+				}
 
 				auto lifetime = std::make_shared<rpl::lifetime>();
 				TTLVoiceStops(fullId) | rpl::on_next([=]() mutable {
@@ -454,8 +403,6 @@ void Document::createComponents() {
 		if (_data->hasThumbnail() && !_data->isSong()) {
 			_data->loadThumbnail(_realParent->fullId());
 			mask |= HistoryDocumentThumbed::Bit();
-		} else if (_data->isSvgImage()) {
-			mask |= HistoryDocumentThumbed::Bit();
 		}
 	}
 	UpdateComponents(mask);
@@ -474,8 +421,7 @@ void Document::createComponents() {
 			_realParent->fullId());
 	}
 	if (const auto voice = Get<HistoryDocumentVoice>()) {
-		const auto media = _parent->data()->media();
-		voice->seekl = (!media || !media->ttlSeconds())
+		voice->seekl = !_parent->data()->media()->ttlSeconds()
 			? std::make_shared<VoiceSeekClickHandler>(_data, [](FullMsgId) {})
 			: nullptr;
 		if (_transcribedRound) {
@@ -498,8 +444,7 @@ QSize Document::countOptimalSize() {
 		const auto history = _realParent->history();
 		const auto session = &history->session();
 		const auto transcribes = &session->api().transcribes();
-		const auto media = _parent->data()->media();
-		if ((media && media->ttlSeconds())
+		if ((_parent->data()->media() && _parent->data()->media()->ttlSeconds())
 			|| _realParent->isScheduled()
 			|| _realParent->isAdminLogEntry()
 			|| (!session->premium()
@@ -571,15 +516,11 @@ QSize Document::countOptimalSize() {
 	auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	if (thumbed) {
-		if (_data->hasThumbnail()) {
-			const auto &location = _data->thumbnailLocation();
-			auto tw = style::ConvertScale(location.width());
-			auto th = style::ConvertScale(location.height());
-			if (tw > th) {
-				thumbed->thumbw = (tw * st.thumbSize) / th;
-			} else {
-				thumbed->thumbw = st.thumbSize;
-			}
+		const auto &location = _data->thumbnailLocation();
+		auto tw = style::ConvertScale(location.width());
+		auto th = style::ConvertScale(location.height());
+		if (tw > th) {
+			thumbed->thumbw = (tw * st.thumbSize) / th;
 		} else {
 			thumbed->thumbw = st.thumbSize;
 		}
@@ -651,13 +592,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	const auto hostedInstantViewAudio = IsHostedInstantViewMedia(_parent)
-		&& (_data->isAudioFile() || _data->isVoiceMessage());
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-		if (hostedInstantViewAudio) {
-			result.setWidth(std::max(newWidth, result.width()));
-		}
 		if (isBubbleBottom()) {
 			const auto thumbedWidth = thumbedLinkMaxWidth();
 			const auto statusWidth = thumbedWidth
@@ -686,9 +622,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		return result;
 	}
 
-	if (!hostedInstantViewAudio) {
-		accumulate_min(newWidth, maxWidth());
-	}
+	accumulate_min(newWidth, maxWidth());
 	auto newHeight = st.padding.top() + st.thumbSize + st.padding.bottom();
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
@@ -769,7 +703,7 @@ void Document::draw(
 			FillThumbnailOverlay(p, rthumb, rounding, context);
 		}
 
-		if (radial || (!loaded && !_data->loading()) || _data->waitingForAlbum()) {
+		if ((radial || (!loaded && !_data->loading()) || _data->waitingForAlbum()) && !AyuFeatures::MessageShot::isTakingShot()) {
 			const auto backOpacity = (loaded && !_data->uploading()) ? radialOpacity : 1.;
 			p.setPen(Qt::NoPen);
 			p.setBrush(sti->msgDateImgBg);
@@ -819,8 +753,6 @@ void Document::draw(
 			&& _parent->data()->media()->ttlSeconds()
 			&& _openl;
 		const auto ttlRect = hasTtlBadge ? TTLRectFromInner(inner) : QRect();
-
-		paintPlaybackBlobs(p, context, inner);
 
 		const auto coverDrawn = _data->isSongWithCover()
 			&& DrawThumbnailAsSongCover(
@@ -873,6 +805,10 @@ void Document::draw(
 						: stm->historyFilePlay)
 					: _data->isImage()
 					? stm->historyFileImage
+					: _data->filename().endsWith(
+						u".plugin"_q,
+						Qt::CaseInsensitive)
+					? stm->historyFilePlugin
 					: stm->historyFileDocument;
 			} else {
 				return _data->isSongWithCover()
@@ -944,35 +880,6 @@ void Document::draw(
 				_iconCache);
 		}
 
-		if (_drawTtl) {
-			const auto voice = Get<HistoryDocumentVoice>();
-			const auto progress = (voice && voice->playback)
-				? voice->playback->progress.current()
-				: 0.;
-			if (voice && progress > 0.) {
-				if (!voice->once) {
-					voice->once
-						= std::make_unique<Ui::VoiceOnceParticles>();
-				}
-				const auto stepInside = style::ConvertScaleExact(1.5) * 2;
-				const auto arcRect = QRectF(inner - Margins(stepInside));
-				const auto center = arcRect.center();
-				const auto radius = arcRect.width() / 2.;
-				const auto degrees = 90. + 360. * (1. - progress);
-				const auto angle = degrees * M_PI / 180.;
-				const auto cosa = std::cos(angle);
-				const auto sina = std::sin(angle);
-				voice->once->radial.paint(
-					p,
-					QPointF(
-						center.x() + radius * cosa,
-						center.y() - radius * sina),
-					QPointF(-sina, -cosa),
-					stm->msgBg->c,
-					1.);
-			}
-		}
-
 		drawCornerDownload(p, context, mode);
 	}
 	auto namewidth = width - nameleft - nameright;
@@ -1011,10 +918,6 @@ void Document::draw(
 			voiceStatusOverride = Ui::FormatPlayedText(
 				base::SafeRound(progress * voice->lastDurationMs) / 1000,
 				voice->lastDurationMs / 1000);
-		} else if (_voiceHoverProgress >= 0 && voice->lastDurationMs > 0) {
-			voiceStatusOverride = Ui::FormatPlayedText(
-				base::SafeRound(_voiceHoverProgress * voice->lastDurationMs) / 1000,
-				voice->lastDurationMs / 1000);
 		}
 		if (voice->transcribe) {
 			const auto size = voice->transcribe->size();
@@ -1031,17 +934,13 @@ void Document::draw(
 		}
 		const auto inTTLViewer = _parent->delegate()->elementContext()
 			== Context::TTLViewer;
-		if (inTTLViewer && !voice->once) {
-			voice->once = std::make_unique<Ui::VoiceOnceParticles>();
-		}
 		PaintWaveform(p,
 			context,
 			_transcribedRound ? _data->round() : _data->voice(),
 			namewidth + st::msgWaveformSkip,
 			progress,
 			inTTLViewer,
-			_voiceHoverProgress,
-			inTTLViewer ? &voice->once->waveform : nullptr);
+			_voiceHoverProgress);
 		p.restore();
 	} else if (const auto named = Get<HistoryDocumentNamed>()) {
 		p.setPen(stm->historyFileNameFg);
@@ -1130,16 +1029,9 @@ void Document::validateThumbnail(
 		not_null<const HistoryDocumentThumbed*> thumbed,
 		int size,
 		Ui::BubbleRounding rounding) const {
-	const auto good = _data->isSvgImage()
-		? _dataMedia->goodThumbnail()
-		: nullptr;
-	const auto normal = good ? good : _dataMedia->thumbnail();
+	const auto normal = _dataMedia->thumbnail();
 	const auto blurred = _dataMedia->thumbnailInline();
 	if (!normal && !blurred) {
-		if (_data->isSvgImage()) {
-			_dataMedia->goodThumbnailWanted();
-			Data::DocumentMedia::CheckGoodThumbnail(_data);
-		}
 		return;
 	}
 	const auto outer = QSize(size, size);
@@ -1196,10 +1088,6 @@ void Document::ensureDataMediaCreated() const {
 		|| _transcribedRound) {
 		_dataMedia->thumbnailWanted(_realParent->fullId());
 	}
-	if (_data->isSvgImage()) {
-		_dataMedia->goodThumbnailWanted();
-		Data::DocumentMedia::CheckGoodThumbnail(_data);
-	}
 	history()->owner().registerHeavyViewPart(_parent);
 }
 
@@ -1216,7 +1104,8 @@ void Document::drawCornerDownload(
 		LayoutMode mode) const {
 	if (dataLoaded()
 		|| _data->loadedInMediaCache()
-		|| !downloadInCorner()) {
+		|| !downloadInCorner()
+		|| AyuFeatures::MessageShot::isTakingShot()) {
 		return;
 	}
 	auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
@@ -1723,51 +1612,35 @@ QMargins Document::bubbleMargins() const {
 }
 
 void Document::refreshCaption(bool last) {
-	const auto applySkipBlock = [&](Ui::Text::String &caption) {
+	const auto now = Get<HistoryDocumentCaptioned>();
+	auto caption = createCaption();
+	if (!caption.isEmpty()) {
+		if (now) {
+			return;
+		}
+		AddComponents(HistoryDocumentCaptioned::Bit());
+		auto captioned = Get<HistoryDocumentCaptioned>();
+		captioned->caption = std::move(caption);
 		const auto skip = last ? _parent->skipBlockWidth() : 0;
 		if (skip) {
-			caption.updateSkipBlock(
+			captioned->caption.updateSkipBlock(
 				_parent->skipBlockWidth(),
 				_parent->skipBlockHeight());
 		} else {
-			caption.removeSkipBlock();
+			captioned->caption.removeSkipBlock();
 		}
-	};
-	if (const auto now = Get<HistoryDocumentCaptioned>()) {
-		applySkipBlock(now->caption);
-		return;
+	} else if (now) {
+		RemoveComponents(HistoryDocumentCaptioned::Bit());
 	}
-	auto caption = createCaption();
-	if (caption.isEmpty()) {
-		return;
-	}
-	AddComponents(HistoryDocumentCaptioned::Bit());
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	captioned->caption = std::move(caption);
-	applySkipBlock(captioned->caption);
-}
-
-int Document::widenGroupingMaxWidth(int current, bool last) {
-	refreshCaption(last);
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	if (!captioned) {
-		return current;
-	}
-	const auto &caption = captioned->caption;
-	const auto padding = st::msgPadding.left() + st::msgPadding.right();
-	const auto proseFull = padding + caption.maxWidth();
-	const auto proseCapped = std::min(proseFull, int(st::msgMaxWidth));
-	const auto monospaceRaw = caption.countMaxMonospaceWidth();
-	const auto monospaceFull = monospaceRaw
-		? (padding + monospaceRaw)
-		: 0;
-	return std::max({ current, proseCapped, monospaceFull });
 }
 
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
+
+	const_cast<Document*>(this)->refreshCaption(last);
+
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
@@ -1801,16 +1674,7 @@ void Document::drawGrouped(
 		not_null<QPixmap*> cache) const {
 	const auto maybeMediaHighlight = context.highlightPathCache
 		&& context.highlightPathCache->isEmpty();
-	const auto origin = geometry.topLeft();
-#if defined(Q_OS_WIN) && defined(_M_ARM64)
-	// Workaround MSVC ARM64 /O2 codegen bug: QPointF(QPoint(0, -3))
-	// produces yp == ~4.29e9 instead of -3.0 here. Touching the ints
-	// through a volatile load first forces correct sign-extension on
-	// the path that feeds QPointF's int->double conversion.
-	[[maybe_unused]] volatile auto touch = 0 + origin.x() + origin.y();
-#endif // defined(Q_OS_WIN) && defined(_M_ARM64)
-	const auto forigin = QPointF(origin);
-	p.translate(forigin);
+	p.translate(geometry.topLeft());
 	draw(
 		p,
 		context.translated(-geometry.topLeft()),
@@ -1837,64 +1701,6 @@ TextState Document::getStateGrouped(
 		LayoutMode::Grouped);
 }
 
-void Document::paintPlaybackBlobs(
-		Painter &p,
-		const PaintContext &context,
-		QRect inner) const {
-	if (anim::Disabled() || _drawTtl) {
-		return;
-	}
-	const auto voice = Get<HistoryDocumentVoice>();
-	if (!voice || !voice->playback) {
-		return;
-	}
-	const auto voiceData = _transcribedRound
-		? _data->round()
-		: _data->voice();
-	if (!voiceData) {
-		return;
-	}
-	auto &playback = *voice->playback;
-	if (!playback.blobs) {
-		playback.blobs = std::make_unique<Ui::Paint::Blobs>(
-			VoicePlaybackBlobs(),
-			kVoiceBlobLevelDuration,
-			1.);
-	}
-
-	const auto &waveform = voiceData->waveform;
-	auto loudness = 0.;
-	if (!waveform.isEmpty() && waveform.at(0) >= 0) {
-		const auto count = int(waveform.size());
-		const auto progress = std::clamp(playback.progress.current(), 0., 1.);
-		const auto center = std::clamp(int(progress * count), 0, count - 1);
-		auto peak = 0;
-		for (auto i = center - 1; i <= center + 1; ++i) {
-			if (i >= 0 && i < count) {
-				peak = std::max(peak, int(waveform.at(i)));
-			}
-		}
-		const auto maxValue = std::max(1, int(voiceData->wavemax));
-		loudness = std::sqrt(std::clamp(peak / float64(maxValue), 0., 1.));
-	}
-	const auto level = kVoiceBlobIdleLevel
-		+ (1. - kVoiceBlobIdleLevel) * loudness;
-	playback.blobs->setLevel(level);
-
-	const auto now = context.now;
-	if (!playback.blobsLastUpdate) {
-		playback.blobsLastUpdate = now;
-	}
-	playback.blobs->updateLevel(now - playback.blobsLastUpdate);
-	playback.blobsLastUpdate = now;
-
-	p.save();
-	p.translate(QRectF(inner).center());
-	auto hq = PainterHighQualityEnabler(p);
-	playback.blobs->paint(p, QBrush(context.messageStyle()->msgFileBg->c));
-	p.restore();
-}
-
 bool Document::voiceProgressAnimationCallback(crl::time now) {
 	if (anim::Disabled()) {
 		now += (2 * kAudioVoiceMsgUpdateView);
@@ -1914,17 +1720,6 @@ bool Document::voiceProgressAnimationCallback(crl::time now) {
 		}
 	}
 	return false;
-}
-
-void Document::clickHandlerActiveChanged(const ClickHandlerPtr &p, bool active) {
-	if (!active && _voiceHoverProgress >= 0) {
-		if (const auto voice = Get<HistoryDocumentVoice>()) {
-			if (p == voice->seekl) {
-				_voiceHoverProgress = -1;
-				repaint();
-			}
-		}
-	}
 }
 
 void Document::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed) {
@@ -1957,11 +1752,6 @@ void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 	if (auto thumbed = Get<HistoryDocumentThumbed>()) {
 		if (thumbed->linksavel) {
 			thumbed->linksavel->setMessageId(fullId);
-		}
-		if (thumbed->linkopenwithl) {
-			thumbed->linkopenwithl->setMessageId(fullId);
-		}
-		if (thumbed->linkcancell) {
 			thumbed->linkcancell->setMessageId(fullId);
 		}
 	}
@@ -1982,15 +1772,14 @@ void Document::hideSpoilers() {
 	}
 }
 
-Ui::Text::String Document::createCaption() const {
-	return File::createCaption(_realParent);
+void Document::revealSpoilers() {
+	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+		captioned->caption.setSpoilerRevealed(true, anim::type::instant);
+	}
 }
 
-int Document::contributedMaxMonospaceWidth() const {
-	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		return captioned->caption.countMaxMonospaceWidth();
-	}
-	return 0;
+Ui::Text::String Document::createCaption() const {
+	return File::createCaption(_realParent);
 }
 
 void Document::TooltipFilename::setElided(bool value) {

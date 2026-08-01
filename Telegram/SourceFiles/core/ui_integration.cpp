@@ -21,7 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/basic_click_handlers.h"
 #include "ui/emoji_config.h"
-#include "ui/toast/toast.h"
 #include "lang/lang_keys.h"
 #include "platform/platform_specific.h"
 #include "boxes/url_auth_box.h"
@@ -34,10 +33,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "mainwindow.h"
 #include "base/unixtime.h"
-#include "styles/style_chat_helpers.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QLocale>
+
+// AyuGram includes
+#include "ayu/ayu_url_handlers.h"
+
 
 namespace Core {
 namespace {
@@ -249,14 +251,14 @@ Ui::Text::MarkedContext TextContext(TextContextArgs &&args) {
 		? Factory([simple, loop = args.customEmojiLoopLimit](
 				QStringView data,
 				const Context &context) {
-			return MakeWrappedEmoji<Ui::Text::LimitedLoopsEmoji>(
+			return std::make_unique<Ui::Text::LimitedLoopsEmoji>(
 				simple(data, context),
 				loop);
 		})
 		: Factory([simple](
 				QStringView data,
 				const Context &context) {
-			return MakeWrappedEmoji<Ui::Text::FirstFrameEmoji>(
+			return std::make_unique<Ui::Text::FirstFrameEmoji>(
 				simple(data, context));
 		});
 	args.details.session = session;
@@ -432,6 +434,10 @@ bool UiIntegration::handleUrlClick(
 		}
 	}
 
+	if (AyuUrlHandlers::TryHandleSpotify(url)) {
+		return true;
+	}
+
 	auto parsed = UrlForAutoLogin(url);
 	const auto domain = DomainForAutoLogin(parsed);
 	const auto skip = context.value<ClickHandlerContext>().skipBotAutoLogin;
@@ -445,17 +451,9 @@ bool UiIntegration::handleUrlClick(
 bool UiIntegration::copyPreOnClick(const QVariant &context) {
 	const auto my = context.value<ClickHandlerContext>();
 	if (const auto window = my.sessionWindow.get()) {
-		window->showToast({
-			.text = { tr::lng_code_copied(tr::now) },
-			.iconLottie = u"toast/copy"_q,
-			.iconLottieSize = st::toastLottieIconSize,
-		});
+		window->showToast(tr::lng_code_copied(tr::now));
 	} else if (my.show) {
-		my.show->showToast({
-			.text = { tr::lng_code_copied(tr::now) },
-			.iconLottie = u"toast/copy"_q,
-			.iconLottieSize = st::toastLottieIconSize,
-		});
+		my.show->showToast(tr::lng_code_copied(tr::now));
 	}
 	return true;
 }

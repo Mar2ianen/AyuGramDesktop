@@ -121,18 +121,6 @@ enum class AllowedReactionsType : uchar {
 	Some,
 };
 
-enum class ProfileTab : uchar {
-	None,
-	Posts,
-	Gifts,
-	Media,
-	Files,
-	Music,
-	Voice,
-	Links,
-	Gifs,
-};
-
 struct AllowedReactions {
 	std::vector<ReactionId> some;
 	int maxCount = 0;
@@ -197,7 +185,7 @@ struct PeerBarDetails {
 	TimeId nameChangeDate = 0;
 	TimeId photoChangeDate = 0;
 	QString requestChatTitle;
-	TimeId requestChatDate = 0;
+	TimeId requestChatDate;
 	UserData *businessBot = nullptr;
 	QString businessBotManageUrl;
 	int paysPerMessage = 0;
@@ -310,8 +298,6 @@ public:
 		PeerId sublistPeerId) const;
 
 	[[nodiscard]] bool useSubsectionTabs() const;
-	[[nodiscard]] bool displaySubsectionTabs() const;
-	[[nodiscard]] bool displayAsForum() const;
 	[[nodiscard]] bool viewForumAsMessages() const;
 	void processTopics(const MTPVector<MTPForumTopic> &topics);
 
@@ -322,6 +308,7 @@ public:
 		return _notify;
 	}
 
+	[[nodiscard]] bool isAyuNoForwards() const;
 	[[nodiscard]] bool allowsForwarding() const;
 	[[nodiscard]] Data::RestrictionCheckResult amRestricted(
 		ChatRestriction right) const;
@@ -475,8 +462,8 @@ public:
 
 	[[nodiscard]] bool canPinMessages() const;
 	[[nodiscard]] bool canEditMessagesIndefinitely() const;
-	[[nodiscard]] bool canCreatePolls(bool forbidInForums = true) const;
-	[[nodiscard]] bool canCreateTodoLists(bool forbidInForums = true) const;
+	[[nodiscard]] bool canCreatePolls() const;
+	[[nodiscard]] bool canCreateTodoLists() const;
 	[[nodiscard]] bool canCreateTopics() const;
 	[[nodiscard]] bool canManageTopics() const;
 	[[nodiscard]] bool canPostStories() const;
@@ -599,9 +586,6 @@ public:
 
 	[[nodiscard]] int peerGiftsCount() const;
 
-	void setMainProfileTab(Data::ProfileTab tab);
-	[[nodiscard]] Data::ProfileTab mainProfileTab() const;
-
 	[[nodiscard]] MTPInputPeer input() const;
 
 	const PeerId id;
@@ -665,7 +649,6 @@ private:
 	BlockStatus _blockStatus = BlockStatus::Unknown;
 	LoadedStatus _loadedStatus = LoadedStatus::Not;
 	TranslationFlag _translationFlag = TranslationFlag::Unknown;
-	Data::ProfileTab _mainProfileTab = Data::ProfileTab::None;
 	uint8 _colorIndex : 6 = 0;
 	uint8 _colorIndexCloud : 1 = 0;
 	std::optional<uint8> _colorProfileIndex;
@@ -696,10 +679,6 @@ void SetTopPinnedMessageId(
 [[nodiscard]] uint64 BackgroundEmojiIdFromColor(const MTPPeerColor *color);
 [[nodiscard]] std::optional<uint8> ColorIndexFromColor(const MTPPeerColor *);
 
-[[nodiscard]] ProfileTab ParseProfileTab(const MTPProfileTab *tab);
-[[nodiscard]] MTPProfileTab ProfileTabToMTP(ProfileTab tab);
-
 [[nodiscard]] bool IsBotUserCreatesTopics(not_null<PeerData*>);
-[[nodiscard]] bool IsBotCreatesTopics(not_null<const PeerData*>);
 
 } // namespace Data

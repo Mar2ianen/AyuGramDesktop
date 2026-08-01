@@ -80,6 +80,7 @@ mediaviewPipButton: IconButton(mediaviewControlsButton) {
 	iconPosition: point(4px, 4px);
 }
 
+mediaviewPipMargins: callShadowExtend;
 mediaviewPipShadow: callShadow;
 
 mediaviewFullScreenButtonSkip: 4px;
@@ -254,7 +255,7 @@ mediaviewTextPalette: TextPalette(defaultTextPalette) {
 	spoilerFg: mediaviewCaptionFg;
 }
 
-mediaviewCaptionStyle: historyTextStyle;
+mediaviewCaptionStyle: defaultTextStyle;
 
 mediaviewThickFont: semiboldFont;
 mediaviewFont: normalFont;
@@ -468,6 +469,8 @@ pipVolumeIcon1: icon {{ "player/player_volume_small", mediaviewPipControlsFg }};
 pipVolumeIcon1Over: icon {{ "player/player_volume_small", mediaviewPipControlsFgOver }};
 pipVolumeIcon2: icon {{ "player/player_volume_on", mediaviewPipControlsFg }};
 pipVolumeIcon2Over: icon {{ "player/player_volume_on", mediaviewPipControlsFgOver }};
+
+speedSliderDividerSize: size(2px, 8px);
 
 storiesMaxSize: size(540px, 960px);
 storiesSiblingWidthMin: 200px; // Try making sibling not less than this.
@@ -696,6 +699,7 @@ storiesEmojiPan: EmojiPan(defaultEmojiPan) {
 		menuGifAdd: icon {{ "menu/gif", storiesComposeWhiteText }};
 		menuGifRemove: icon {{ "menu/delete", storiesComposeWhiteText }};
 		menuMute: icon {{ "menu/mute", storiesComposeWhiteText }};
+		menuUnmute: icon {{ "menu/unmute", storiesComposeWhiteText }};
 		menuSchedule: icon {{ "menu/calendar", storiesComposeWhiteText }};
 		menuWhenOnline: icon {{ "menu/send_when_online", storiesComposeWhiteText }};
 		menuSpoiler: icon {{ "menu/spoiler_on", storiesComposeWhiteText }};

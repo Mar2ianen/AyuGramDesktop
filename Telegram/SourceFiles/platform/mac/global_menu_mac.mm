@@ -20,11 +20,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/base_platform_info.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/fields/input_field.h"
-#include "base/invoke_queued.h"
 
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QMenu>
-#include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QTextEdit>
 #include <QtGui/QAction>
@@ -33,29 +31,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <Cocoa/Cocoa.h>
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+
+
 namespace Platform {
 namespace {
-
-struct ComputedState {
-	bool logoutDisabled = false;
-	bool undoDisabled = false;
-	bool redoDisabled = false;
-	bool cutDisabled = false;
-	bool copyDisabled = false;
-	bool pasteDisabled = false;
-	bool deleteDisabled = false;
-	bool selectAllDisabled = false;
-	bool contactsDisabled = false;
-	bool addContactDisabled = false;
-	bool newGroupDisabled = false;
-	bool newChannelDisabled = false;
-	bool showTelegramDisabled = false;
-	Ui::MarkdownEnabledState markdown;
-
-	friend inline bool operator==(
-		const ComputedState &,
-		const ComputedState &) = default;
-};
 
 class Manager final {
 public:
@@ -70,12 +51,17 @@ private:
 	void buildAppleMenu(QMenu *main);
 	void buildFileMenu(QMenu *file);
 	void buildEditMenu(QMenu *edit);
+
+	void buildGhostModeMenu(QMenu *ghostMode);
+
 	void buildWindowMenu(QMenu *window);
 	void retranslate();
 	void ensureLanguageBound();
 	void recomputeState();
 	[[nodiscard]] bool clipboardHasText();
 	[[nodiscard]] Window::Controller *resolveActiveWindow() const;
+
+	[[nodiscard]] GhostModeAccountSettings *resolveGhostSettings() const;
 
 	template <typename Callback>
 	void withActiveWindow(Callback callback) {
@@ -92,11 +78,6 @@ private:
 	}
 
 	std::unique_ptr<QMenuBar> _menuBar;
-	// Coalesces requestUpdate() bursts into one recomputeState() per Qt
-	// event-loop turn. Posted events drain on every CFRunLoop
-	// BeforeWaiting before the next NSEvent dispatches, so menu state
-	// is fresh by the time Cmd+C reaches AppKit's performKeyEquivalent.
-	std::unique_ptr<SingleQueuedInvokation> _scheduledUpdate;
 	QAction *_logout = nullptr;
 	QAction *_undo = nullptr;
 	QAction *_redo = nullptr;
@@ -120,12 +101,16 @@ private:
 	QAction *_monospace = nullptr;
 	QAction *_clearFormat = nullptr;
 
+	QMenu *_ghostModeMenu = nullptr;
+	QAction *_ghostMode = nullptr;
+	QAction *_readOnInteract = nullptr;
+	QAction *_scheduleMessages = nullptr;
+
 	NSPasteboard *_pasteboard = nullptr;
 	int _pasteboardChangeCount = -1;
 	bool _pasteboardHasText = false;
 
-	std::optional<ComputedState> _lastState;
-
+	rpl::event_stream<> _updateRequests;
 	rpl::event_stream<Ui::MarkdownEnabledState> _markdownChanges;
 	rpl::lifetime _lifetime;
 	bool _languageBound = false;
@@ -138,7 +123,6 @@ void SendKeySequence(
 	const auto focused = QApplication::focusWidget();
 	if (qobject_cast<QLineEdit*>(focused)
 		|| qobject_cast<QTextEdit*>(focused)
-		|| qobject_cast<QLabel*>(focused)
 		|| dynamic_cast<HistoryInner*>(focused)) {
 		QApplication::postEvent(
 			focused,
@@ -163,6 +147,15 @@ Window::Controller *Manager::resolveActiveWindow() const {
 	}
 	const auto active = Core::App().activeWindow();
 	return active ? active : Core::App().activePrimaryWindow();
+}
+
+GhostModeAccountSettings *Manager::resolveGhostSettings() const {
+	const auto window = resolveActiveWindow();
+	if (!window || window->locked()) {
+		return nullptr;
+	}
+	const auto session = window->maybeSession();
+	return session ? &AyuSettings::ghost(session) : nullptr;
 }
 
 bool Manager::clipboardHasText() {
@@ -225,6 +218,24 @@ void Manager::retranslate() {
 	if (_clearFormat) {
 		_clearFormat->setText(tr::lng_menu_formatting_clear(tr::now));
 	}
+	if (_ghostModeMenu) {
+		_ghostModeMenu->setTitle(tr::ayu_CategoryGhostMode(tr::now));
+	}
+	if (_ghostMode) {
+		if (const auto ghost = resolveGhostSettings()) {
+			_ghostMode->setText(ghost->isGhostModeActive()
+				? tr::ayu_DisableGhostMode(tr::now)
+				: tr::ayu_EnableGhostMode(tr::now));
+		} else {
+			_ghostMode->setText(tr::ayu_EnableGhostMode(tr::now));
+		}
+	}
+	if (_readOnInteract) {
+		_readOnInteract->setText(tr::ayu_MarkReadAfterAction(tr::now));
+	}
+	if (_scheduleMessages) {
+		_scheduleMessages->setText(tr::ayu_UseScheduledMessages(tr::now));
+	}
 }
 
 void Manager::ensureLanguageBound() {
@@ -276,61 +287,31 @@ void Manager::recomputeState() {
 				markdownState = inputField->markdownEnabledState();
 			}
 		}
-	} else if (const auto label = qobject_cast<QLabel*>(focused)) {
-		const auto flags = label->textInteractionFlags();
-		const auto selectable = flags
-			& (Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-		if (selectable) {
-			canCopy = label->hasSelectedText();
-			canSelectAll = !label->text().isEmpty();
-		}
 	} else if (const auto list = dynamic_cast<HistoryInner*>(focused)) {
 		canCopy = list->canCopySelected();
 		canDelete = list->canDeleteSelected();
 	}
+
+	_markdownChanges.fire_copy(markdownState);
 
 	widget->updateIsActive();
 	const auto controller = window->sessionController();
 	const auto logged = (controller != nullptr);
 	const auto inactive = !logged || window->locked();
 	const auto support = logged && controller->session().supportMode();
-
-	auto next = ComputedState{
-		.logoutDisabled = !logged && !Core::App().passcodeLocked(),
-		.undoDisabled = !canUndo,
-		.redoDisabled = !canRedo,
-		.cutDisabled = !canCut,
-		.copyDisabled = !canCopy,
-		.pasteDisabled = !canPaste,
-		.deleteDisabled = !canDelete,
-		.selectAllDisabled = !canSelectAll,
-		.contactsDisabled = inactive || support,
-		.addContactDisabled = inactive,
-		.newGroupDisabled = inactive || support,
-		.newChannelDisabled = inactive || support,
-		.showTelegramDisabled = widget->isActive(),
-		.markdown = markdownState,
-	};
-	if (_lastState && *_lastState == next) {
-		return;
-	}
-	_lastState = next;
-
-	_markdownChanges.fire_copy(markdownState);
-
-	ForceDisabled(_logout, next.logoutDisabled);
-	ForceDisabled(_undo, next.undoDisabled);
-	ForceDisabled(_redo, next.redoDisabled);
-	ForceDisabled(_cut, next.cutDisabled);
-	ForceDisabled(_copy, next.copyDisabled);
-	ForceDisabled(_paste, next.pasteDisabled);
-	ForceDisabled(_delete, next.deleteDisabled);
-	ForceDisabled(_selectAll, next.selectAllDisabled);
-	ForceDisabled(_contacts, next.contactsDisabled);
-	ForceDisabled(_addContact, next.addContactDisabled);
-	ForceDisabled(_newGroup, next.newGroupDisabled);
-	ForceDisabled(_newChannel, next.newChannelDisabled);
-	ForceDisabled(_showTelegram, next.showTelegramDisabled);
+	ForceDisabled(_logout, !logged && !Core::App().passcodeLocked());
+	ForceDisabled(_undo, !canUndo);
+	ForceDisabled(_redo, !canRedo);
+	ForceDisabled(_cut, !canCut);
+	ForceDisabled(_copy, !canCopy);
+	ForceDisabled(_paste, !canPaste);
+	ForceDisabled(_delete, !canDelete);
+	ForceDisabled(_selectAll, !canSelectAll);
+	ForceDisabled(_contacts, inactive || support);
+	ForceDisabled(_addContact, inactive);
+	ForceDisabled(_newGroup, inactive || support);
+	ForceDisabled(_newChannel, inactive || support);
+	ForceDisabled(_showTelegram, widget->isActive());
 
 	const auto disabled = [&](const QString &tag) {
 		return !markdownState.enabledForTag(tag);
@@ -345,17 +326,39 @@ void Manager::recomputeState() {
 		_monospace,
 		disabled(Field::kTagPre) || disabled(Field::kTagCode));
 	ForceDisabled(_clearFormat, markdownState.disabled());
+
+	const auto ghost = resolveGhostSettings();
+	const auto ghostInactive = (ghost == nullptr);
+	ForceDisabled(_ghostMode, ghostInactive);
+	ForceDisabled(_readOnInteract, ghostInactive);
+	ForceDisabled(_scheduleMessages, ghostInactive);
+	const auto setChecked = [](QAction *action, bool checked) {
+		const auto wasBlocked = action->blockSignals(true);
+		action->setChecked(checked);
+		action->blockSignals(wasBlocked);
+	};
+	if (ghost) {
+		_ghostMode->setText(ghost->isGhostModeActive()
+			? tr::ayu_DisableGhostMode(tr::now)
+			: tr::ayu_EnableGhostMode(tr::now));
+		setChecked(_readOnInteract, ghost->markReadAfterAction());
+		setChecked(_scheduleMessages, ghost->useScheduledMessages());
+	} else {
+		_ghostMode->setText(tr::ayu_EnableGhostMode(tr::now));
+		setChecked(_readOnInteract, false);
+		setChecked(_scheduleMessages, false);
+	}
 }
 
 void Manager::buildAppleMenu(QMenu *main) {
 	{
 		auto callback = [this] {
 			withActiveWindow([](not_null<Window::Controller*> window) {
-				window->show(Box(AboutBox));
+				window->show(Box(AboutBox, window->sessionController()));
 			});
 		};
 		const auto about = main->addAction(
-			u"About Telegram"_q,
+			u"About AyuGram"_q,
 			std::move(callback));
 		about->setMenuRole(QAction::AboutQtRole);
 	}
@@ -414,18 +417,27 @@ void Manager::buildEditMenu(QMenu *edit) {
 		[] { SendKeySequence(Qt::Key_X, Qt::ControlModifier); },
 		QKeySequence::Cut);
 	_cut->setShortcutContext(Qt::WidgetShortcut);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+	_cut->setMenuRole(QAction::CutRole);
+#endif // Qt >= 6.8.0
 	_copy = edit->addAction(
 		u"Copy"_q,
 		receiver,
 		[] { SendKeySequence(Qt::Key_C, Qt::ControlModifier); },
 		QKeySequence::Copy);
 	_copy->setShortcutContext(Qt::WidgetShortcut);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+	_copy->setMenuRole(QAction::CopyRole);
+#endif // Qt >= 6.8.0
 	_paste = edit->addAction(
 		u"Paste"_q,
 		receiver,
 		[] { SendKeySequence(Qt::Key_V, Qt::ControlModifier); },
 		QKeySequence::Paste);
 	_paste->setShortcutContext(Qt::WidgetShortcut);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+	_paste->setMenuRole(QAction::PasteRole);
+#endif // Qt >= 6.8.0
 	_delete = edit->addAction(
 		u"Delete"_q,
 		receiver,
@@ -500,6 +512,9 @@ void Manager::buildEditMenu(QMenu *edit) {
 		[] { SendKeySequence(Qt::Key_A, Qt::ControlModifier); },
 		QKeySequence::SelectAll);
 	_selectAll->setShortcutContext(Qt::WidgetShortcut);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+	_selectAll->setMenuRole(QAction::SelectAllRole);
+#endif // Qt >= 6.8.0
 
 	if (!Platform::IsMac26_0OrGreater()) {
 		edit->addSeparator();
@@ -512,6 +527,64 @@ void Manager::buildEditMenu(QMenu *edit) {
 				| Qt::Key_Space));
 		_emoji->setShortcutContext(Qt::WidgetShortcut);
 	}
+}
+
+void Manager::buildGhostModeMenu(QMenu *ghostMode) {
+	_ghostModeMenu = ghostMode;
+	QObject::connect(ghostMode, &QMenu::aboutToShow, ghostMode, [this] {
+		requestUpdate();
+	});
+
+	const auto addToggle = [&](QString text, auto callback) {
+		const auto action = ghostMode->addAction(std::move(text));
+		action->setCheckable(true);
+		QObject::connect(
+			action,
+			&QAction::triggered,
+			action,
+			[this, callback = std::move(callback)](bool checked) {
+				callback(checked);
+				requestUpdate();
+			});
+		return action;
+	};
+
+	_ghostMode = ghostMode->addAction(u"Enable Ghost"_q);
+	QObject::connect(
+		_ghostMode,
+		&QAction::triggered,
+		_ghostMode,
+		[this] {
+			if (const auto ghost = resolveGhostSettings()) {
+				ghost->setGhostModeEnabled(!ghost->isGhostModeActive());
+			}
+			requestUpdate();
+		});
+
+	ghostMode->addSeparator();
+
+	_readOnInteract = addToggle(
+		u"Read on Interact"_q,
+		[this](bool enabled) {
+			if (const auto ghost = resolveGhostSettings()) {
+				ghost->setMarkReadAfterAction(enabled);
+				if (enabled) {
+					ghost->setUseScheduledMessages(false);
+				}
+			}
+		});
+
+	_scheduleMessages = addToggle(
+		u"Schedule Messages"_q,
+		[this](bool enabled) {
+			if (const auto ghost = resolveGhostSettings()) {
+				ghost->setUseScheduledMessages(enabled);
+				if (enabled) {
+					ghost->setMarkReadAfterAction(false);
+				}
+			}
+		});
+
 }
 
 void Manager::buildWindowMenu(QMenu *window) {
@@ -599,9 +672,12 @@ void Manager::buildWindowMenu(QMenu *window) {
 }
 
 void Manager::buildMenu() {
-	buildAppleMenu(_menuBar->addMenu(u"Telegram"_q));
+	buildAppleMenu(_menuBar->addMenu(u"AyuGram"_q));
 	buildFileMenu(_menuBar->addMenu(u"File"_q));
 	buildEditMenu(_menuBar->addMenu(u"Edit"_q));
+
+	buildGhostModeMenu(_menuBar->addMenu(u"Ghost Mode"_q));
+
 	buildWindowMenu(_menuBar->addMenu(u"Window"_q));
 }
 
@@ -613,16 +689,13 @@ void Manager::create() {
 
 	buildMenu();
 
-	_scheduledUpdate = std::make_unique<SingleQueuedInvokation>([this] {
-		if (!_menuBar) {
-			return;
-		}
+	_updateRequests.events() | rpl::on_next([this] {
+		ensureLanguageBound();
 		recomputeState();
-	});
+	}, _lifetime);
 }
 
 void Manager::destroy() {
-	_scheduledUpdate.reset();
 	_lifetime.destroy();
 	_menuBar.reset();
 	_languageBound = false;
@@ -632,18 +705,18 @@ void Manager::destroy() {
 		= _bold = _italic = _underline
 		= _strikeOut = _blockquote = _monospace = _clearFormat
 		= nullptr;
+	_ghostModeMenu = nullptr;
+	_ghostMode = _readOnInteract = _scheduleMessages = nullptr;
 	_pasteboard = nullptr;
 	_pasteboardChangeCount = -1;
 	_pasteboardHasText = false;
-	_lastState.reset();
 }
 
 void Manager::requestUpdate() {
 	if (!_menuBar) {
 		return;
 	}
-	ensureLanguageBound();
-	_scheduledUpdate->call();
+	_updateRequests.fire({});
 }
 
 auto Manager::markdownStateChanges() const

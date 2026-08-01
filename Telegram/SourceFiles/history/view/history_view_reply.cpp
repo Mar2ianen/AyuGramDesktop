@@ -39,6 +39,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 #include "styles/style_polls.h"
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+
+
 namespace HistoryView {
 namespace {
 
@@ -270,6 +274,7 @@ void FillBackgroundEmoji(
 		bool quote,
 		const Ui::BackgroundEmojiCache &cache,
 		const QImage &firstGiftFrame) {
+	const auto was = p.opacity(); // for semi-transparent deleted messages
 	p.setClipRect(rect);
 
 	const auto &frames = cache.frames;
@@ -283,7 +288,7 @@ void FillBackgroundEmoji(
 		if (y >= rect.height()) {
 			return;
 		}
-		p.setOpacity(opacity);
+		p.setOpacity(was * opacity);
 		p.drawImage(
 			right - style::ConvertScale(x + (quote ? 12 : 0)),
 			rect.y() + y,
@@ -315,7 +320,7 @@ void FillBackgroundEmoji(
 	}
 
 	p.setClipping(false);
-	p.setOpacity(1.);
+	p.setOpacity(was);
 }
 
 Reply::Reply()
@@ -390,6 +395,8 @@ void Reply::update(
 	_hasPreview = hasPreview ? 1 : 0;
 	_displaying = data->displaying() ? 1 : 0;
 	_multiline = data->multiline() ? 1 : 0;
+	_replyToStory = (fields.storyId != 0);
+	_replyToPoll = (messagePoll && !pollAnswer) ? 1 : 0;
 	const auto hasQuoteIcon = _displaying
 		&& fields.manualQuote
 		&& !fields.quote.empty();
@@ -418,17 +425,13 @@ void Reply::update(
 			.margin = QMargins(0, st::lineWidth, st::lineWidth, 0),
 		})).append(pollAnswer->text)
 		: messagePoll
-		? Ui::Text::Colorized(
-			Ui::Text::IconEmoji(&st::historyPollReplyIcon)
-		).append(messagePoll->question)
+		? TextWithEntities().append(messagePoll->question)
 		: (message && (fields.quote.empty() || !fields.manualQuote))
 		? message->inReplyText()
 		: !fields.quote.empty()
 		? fields.quote
 		: story
-		? Ui::Text::Colorized(
-			Ui::Text::IconEmoji(&st::historyReplyStoryIcon)
-		).append(story->inReplyText())
+		? story->inReplyText()
 		: externalMedia
 		? externalMedia->toPreview({
 			.hideSender = true,
@@ -677,10 +680,15 @@ void Reply::updateName(
 		+ (_hasQuoteIcon
 			? st::messageTextStyle.blockquote.icon.width()
 			: 0);
+	const auto storySkip = fields.storyId
+		? (st::dialogsMiniReplyStory.skipText
+			+ st::dialogsMiniReplyStory.icon.icon.width())
+		: 0;
 	const auto optimalTextSize = _multiline
 		? countMultilineOptimalSize(previewSkip)
 		: QSize(
 			(previewSkip
+				+ storySkip
 				+ std::min(_text.maxWidth(), st::maxSignatureSize)),
 			st::normalFont->height);
 	_maxWidth = std::max(nameMaxWidth, optimalTextSize.width());
@@ -845,7 +853,8 @@ void Reply::paint(
 	}
 	Ui::Text::ValidateQuotePaintCache(*cache, quoteSt);
 	Ui::Text::FillQuotePaint(p, rect, *cache, quoteSt);
-	if (backgroundEmojiData) {
+	const auto &settings = AyuSettings::getInstance();
+	if (!settings.simpleQuotesAndReplies() && backgroundEmojiData) {
 		ValidateBackgroundEmoji(
 			backgroundEmojiId,
 			colorCollectible,
@@ -868,7 +877,7 @@ void Reply::paint(
 
 	if (_ripple.animation) {
 		_ripple.lastPaintedPoint = inBubble ? QPoint(x, y) : QPoint();
-		_ripple.animation->paint(p, x, y, w, &rippleColor);
+		_ripple.animation->paint(p, x, y, w, &cache->bg2);
 		if (_ripple.animation->empty()) {
 			_ripple.animation.reset();
 			_ripple.lastPaintedPoint = {};
@@ -1012,6 +1021,26 @@ void Reply::paint(
 					owned.emplace(cache->icon);
 					copy->linkFg = owned->color();
 					replyToTextPalette = &*copy;
+				}
+				if (_replyToStory) {
+					st::dialogsMiniReplyStory.icon.icon.paint(
+						p,
+						textLeft + firstLineSkip,
+						textTop,
+						w + 2 * x,
+						replyToTextPalette->linkFg->c);
+					firstLineSkip += st::dialogsMiniReplyStory.skipText
+						+ st::dialogsMiniReplyStory.icon.icon.width();
+				}
+				if (_replyToPoll) {
+					st::historyPollReplyIcon.paint(
+						p,
+						textLeft + firstLineSkip,
+						textTop,
+						w + 2 * x,
+						replyToTextPalette->linkFg->c);
+					firstLineSkip += st::historyPollReplyIconSkip
+						+ st::historyPollReplyIcon.width();
 				}
 				_text.draw(p, {
 					.position = { textLeft, textTop },

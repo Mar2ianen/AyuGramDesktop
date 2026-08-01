@@ -93,11 +93,6 @@ using SendFilesCheck = Fn<bool(
 [[nodiscard]] SendFilesCheck DefaultCheckForPeer(
 	std::shared_ptr<ChatHelpers::Show> show,
 	not_null<PeerData*> peer);
-void RenameFileBox(
-	not_null<Ui::GenericBox*> box,
-	const QString &currentName,
-	bool allowExtensionEdit,
-	Fn<void(QString)> apply);
 
 using SendFilesConfirmed = Fn<void(
 	std::shared_ptr<Ui::PreparedBundle>,
@@ -117,6 +112,7 @@ struct SendFilesBoxDescriptor {
 	SendFilesConfirmed confirmed;
 	Fn<void()> cancelled;
 	FullReplyTo replyTo;
+	Fn<void(const TextWithTags &text)> cancelled2;
 };
 
 class SendFilesBox : public Ui::BoxContent {
@@ -132,7 +128,8 @@ public:
 		const TextWithTags &caption,
 		not_null<PeerData*> toPeer,
 		Api::SendType sendType,
-		SendMenu::Details sendMenuDetails);
+		SendMenu::Details sendMenuDetails,
+		Fn<void(const TextWithTags &text)> cancelled2 = nullptr);
 	SendFilesBox(QWidget*, SendFilesBoxDescriptor &&descriptor);
 
 	void setConfirmedCallback(SendFilesConfirmed callback) {
@@ -183,7 +180,6 @@ private:
 		[[nodiscard]] rpl::producer<int> itemDeleteRequest() const;
 		[[nodiscard]] rpl::producer<int> itemReplaceRequest() const;
 		[[nodiscard]] rpl::producer<int> itemModifyRequest() const;
-		[[nodiscard]] rpl::producer<int> itemRenameRequest() const;
 		[[nodiscard]] rpl::producer<> orderUpdated() const;
 
 		void setSendWay(Ui::SendFilesWay way);
@@ -225,10 +221,9 @@ private:
 	void setSendLargePhotos(bool enabled);
 	void changePrice();
 
+	[[nodiscard]] bool canChangePrice() const;
 	[[nodiscard]] bool hasPrice() const;
 	[[nodiscard]] bool hasSendLargePhotosOption() const;
-	[[nodiscard]] bool canMoveCaptionInCurrentSendWay() const;
-	[[nodiscard]] bool canChangePrice() const;
 	void refreshPriceTag();
 	[[nodiscard]] QImage preparePriceTagBg(QSize size) const;
 
@@ -257,10 +252,7 @@ private:
 	void updateControlsGeometry();
 	void updateCaptionVisibility();
 
-	bool addFiles(
-		not_null<const QMimeData*> data,
-		std::optional<bool> overrideSendImagesAsPhotos = std::nullopt);
-	void applySendImagesAsPhotosOverride(const Ui::PreparedList &list);
+	bool addFiles(not_null<const QMimeData*> data);
 	bool addFiles(Ui::PreparedList list);
 	void addFile(Ui::PreparedFile &&file);
 	void pushBlock(int from, int till);
@@ -309,6 +301,7 @@ private:
 	SendFilesCheck _check;
 	SendFilesConfirmed _confirmedCallback;
 	Fn<void()> _cancelledCallback;
+	Fn<void(const TextWithTags &text)> _cancelled2Callback;
 	rpl::variable<uint64> _price = 0;
 	std::unique_ptr<Ui::RpWidget> _priceTag;
 	QImage _priceTagBg;
@@ -351,5 +344,11 @@ private:
 	QPointer<Ui::RoundButton> _addFile;
 
 	rpl::event_stream<TextWithTags> _textWithTagsRequests;
+
+	// AyuGram files reordering
+
+	[[nodiscard]] bool isFileBlock(int i) const;
+	void moveFile(int from, int to);
+	void setupDragForBlock(not_null<Ui::RpWidget*> w, int index);
 
 };

@@ -36,11 +36,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "window/window_session_controller.h"
+#include "styles/style_boxes.h"
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
-#include "styles/style_settings_active_sessions.h"
 
 namespace Settings {
 namespace {
@@ -459,6 +459,11 @@ void SessionInfoBox(
 		container,
 		tr::lng_sessions_system(),
 		data.system,
+		st::menuIconInfo);
+	AddSessionInfoRow(
+		container,
+		tr::ayu_SessionInfoOfficialApp(),
+		data.officialApp ? tr::lng_box_yes(tr::now) : tr::lng_box_no(tr::now),
 		st::menuIconInfo);
 	AddSessionInfoRow(
 		container,

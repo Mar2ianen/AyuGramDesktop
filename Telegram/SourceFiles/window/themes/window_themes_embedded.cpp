@@ -18,6 +18,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPalette>
 
+// AyuGram includes
+#include "ayu/features/message_shot/message_shot.h"
+
+
 namespace Window {
 namespace Theme {
 namespace {
@@ -181,7 +185,7 @@ style::colorizer ColorizerFrom(
 
 std::optional<QColor> SystemAccentColor() {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	if (Platform::IsWindows() && Platform::IsWindows8OrGreater()) {
+	if (Platform::IsWindows() && !Platform::IsWindows8OrGreater()) {
 		return std::nullopt;
 	}
 #endif // Qt < 6.0.0
@@ -208,7 +212,7 @@ style::colorizer ColorizerForTheme(const QString &absolutePath) {
 		}
 	}
 	const auto &colors = settings.themesAccentColors();
-	if (const auto accent = colors.get(i->type)) {
+	if (const auto accent = AyuFeatures::MessageShot::isChoosingTheme() ? AyuFeatures::MessageShot::getSelectedColorFromDefault() : colors.get(i->type)) {
 		return ColorizerFrom(*i, *accent);
 	}
 	return {};

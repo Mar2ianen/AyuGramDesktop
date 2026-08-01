@@ -38,6 +38,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "lang/lang_keys.h"
 #include "window/notifications_manager.h"
+#include "styles/style_chat.h"
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/utils/telegram_helpers.h"
+
 
 namespace {
 
@@ -317,22 +323,6 @@ void UserData::setPersonalChannel(ChannelId channelId, MsgId messageId) {
 	}
 }
 
-ChannelId UserData::linkedCommunityId() const {
-	return _linkedCommunityId;
-}
-
-void UserData::setLinkedCommunityId(ChannelId id) {
-	if (_linkedCommunityId == id) {
-		return;
-	}
-	_linkedCommunityId = id;
-	if (const auto history = owner().historyLoaded(this)) {
-		history->updateCommunityRegistration();
-		history->updateChatListSortPosition();
-		history->updateChatListExistence();
-	}
-}
-
 UserId UserData::botManagerId() const {
 	return _botManagerId;
 }
@@ -368,18 +358,36 @@ void UserData::setName(
 		const QString &newLastName,
 		const QString &newPhoneName,
 		const QString &newUsername) {
-	bool changeName = !newFirstName.isEmpty() || !newLastName.isEmpty();
+	auto filteredFirstName = newFirstName;
+	auto filteredLastName = newLastName;
 
-	if (changeName && newFirstName.trimmed().isEmpty()) {
-		firstName = newLastName;
+	const auto &settings = AyuSettings::getInstance();
+	if (settings.filterZalgo()) {
+		filteredFirstName = filterZalgo(filteredFirstName);
+		filteredLastName = filterZalgo(filteredLastName);
+	}
+
+	bool changeName = !filteredFirstName.isEmpty() || !filteredLastName.isEmpty();
+
+	QString newFullName;
+	if (changeName && filteredFirstName.trimmed().isEmpty()) {
+		firstName = filteredLastName;
 		lastName = QString();
+		newFullName = firstName;
 	} else {
 		if (changeName) {
-			firstName = newFirstName;
-			lastName = newLastName;
+			firstName = filteredFirstName;
+			lastName = filteredLastName;
 		}
+		newFullName = lastName.isEmpty()
+			? firstName
+			: tr::lng_full_name(
+				tr::now,
+				lt_first_name,
+				firstName,
+				lt_last_name,
+				lastName);
 	}
-	const auto newFullName = langFullName(firstName, lastName);
 	updateNameDelayed(newFullName, newPhoneName, newUsername);
 }
 
@@ -609,6 +617,15 @@ bool UserData::isFake() const {
 }
 
 bool UserData::isPremium() const {
+	if (id) {
+		const auto &settings = AyuSettings::getInstance();
+		if (settings.localPremium()) {
+			if (getSession(id.value)) {
+				return true;
+			}
+		}
+	}
+
 	return flags() & UserDataFlag::Premium;
 }
 
@@ -665,8 +682,12 @@ bool UserData::readDatesPrivate() const {
 }
 
 bool UserData::allowsForwarding() const {
-	return !(flags() & Flag::NoForwardsMyEnabled)
-		&& !(flags() & Flag::NoForwardsPeerEnabled);
+	return true;
+}
+
+bool UserData::isAyuNoForwards() const {
+	return (flags() & Flag::NoForwardsMyEnabled)
+		|| (flags() & Flag::NoForwardsPeerEnabled);
 }
 
 void UserData::setNoForwardsFlags(bool myEnabled, bool peerEnabled) {
@@ -928,7 +949,6 @@ void ApplyUserUpdate(not_null<UserData*> user, const MTPDuserFull &update) {
 	user->setAbout(qs(update.vabout().value_or_empty()));
 	user->setCommonChatsCount(update.vcommon_chats_count().v);
 	user->setPeerGiftsCount(update.vstargifts_count().value_or_empty());
-	user->setMainProfileTab(Data::ParseProfileTab(update.vmain_tab()));
 	user->checkFolder(update.vfolder_id().value_or_empty());
 	if (const auto theme = update.vtheme()) {
 		theme->match([&](const MTPDchatTheme &data) {

@@ -11,17 +11,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/abstract_box.h" // Ui::show().
 #include "chat_helpers/ttl_media_layer_widget.h"
 #include "core/application.h"
-#include "core/click_handler_types.h"
 #include "core/core_settings.h"
 #include "core/mime_type.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_click_handler.h"
 #include "data/data_session.h"
-#include "history/view/media/history_view_gif.h"
 #include "history/history.h"
 #include "history/history_item.h"
-#include "iv/iv_instance.h"
+#include "history/view/media/history_view_gif.h"
 #include "lang/lang_keys.h"
 #include "media/player/media_player_instance.h"
 #include "platform/platform_file_utilities.h"
@@ -31,12 +29,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/checkbox.h"
 #include "ui/wrap/slide_wrap.h"
 #include "window/window_session_controller.h"
-
 #include "styles/style_layers.h"
 
 #include <QtCore/QBuffer>
 #include <QtCore/QMimeType>
 #include <QtCore/QMimeDatabase>
+
+// AyuGram includes
+#include "ayu/ui/boxes/plugin_info_box.h"
+#include <QtCore/QFile>
+
 
 namespace Data {
 namespace {
@@ -229,6 +231,34 @@ void ResolveDocument(
 		}
 		return false;
 	};
+	const auto openPluginInfo = [&] {
+		// image size limit is fine too ig (64MB)
+		if (document->size >= Images::kReadBytesLimit) {
+			return false;
+		}
+		if (controller
+			&& document->filename().endsWith(
+				u".plugin"_q,
+				Qt::CaseInsensitive)
+			&& !document->filepath(true).isEmpty()) {
+			const auto path = document->location(true).name();
+			auto file = QFile(path);
+			if (file.open(QIODevice::ReadOnly)) {
+				const auto data = file.readAll();
+				file.close();
+				auto metadata = Ui::ParsePluginMetadata(data);
+				if (!metadata.id.isEmpty()
+					&& !metadata.name.isEmpty()) {
+					Ui::ShowPluginInfoBox(
+						controller,
+						path,
+						std::move(metadata));
+					return true;
+				}
+			}
+		}
+		return false;
+	};
 	const auto &location = document->location(true);
 	if (document->isTheme() && media->loaded(true)) {
 		showDocument();
@@ -237,12 +267,7 @@ void ResolveDocument(
 		if (document->isAudioFile()
 			|| document->isVoiceMessage()
 			|| document->isVideoMessage()) {
-			::Media::Player::instance()->playPause(
-				{ document, msgId },
-				::Media::Player::PlaylistContext{
-					topicRootId,
-					monoforumPeerId,
-				});
+			::Media::Player::instance()->playPause({ document, msgId });
 			if (controller
 				&& item
 				&& item->media()
@@ -254,22 +279,9 @@ void ResolveDocument(
 		}
 	} else {
 		document->saveFromDataSilent();
-		if (!openImageInApp()) {
-			const auto path = document->filepath(true);
-			if (!path.isEmpty()) {
-				auto context = QVariant();
-				if (item) {
-					auto clickHandlerContext = ClickHandlerContext();
-					clickHandlerContext.itemId = item->fullId();
-					if (controller) {
-						clickHandlerContext.sessionWindow = controller;
-						clickHandlerContext.show = controller->uiShow();
-					}
-					context = QVariant::fromValue(clickHandlerContext);
-				}
-				if (!Core::App().iv().showMarkdown(path, context)) {
-					LaunchWithWarning(path, item);
-				}
+		if (!openPluginInfo() && !openImageInApp()) {
+			if (!document->filepath(true).isEmpty()) {
+				LaunchWithWarning(location.name(), item);
 			} else if (document->status == FileReady
 				|| document->status == FileDownloadFailed) {
 				DocumentSaveClickHandler::Save(

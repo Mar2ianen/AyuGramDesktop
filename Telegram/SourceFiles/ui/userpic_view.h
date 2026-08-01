@@ -10,31 +10,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 
 #include <QtGui/QImage>
-#include <QtGui/QColor>
-
-class QPainter;
 
 namespace Ui {
 
 class EmptyUserpic;
 
 [[nodiscard]] float64 ForumUserpicRadiusMultiplier();
-
-struct CommunityUserpicEffect {
-	QImage image;
-	int size = 0;
-	QRgb color = 0;
-	int paletteVersion = 0;
-	int dpr = 0;
-};
-
-void PaintCommunityUserpicEffect(
-	QPainter &p,
-	CommunityUserpicEffect &cache,
-	int x,
-	int y,
-	int size,
-	QColor color);
 
 enum class PeerUserpicShape : uint8 {
 	Auto,
@@ -53,6 +34,7 @@ struct PeerUserpicView {
 	base::weak_ptr<const EmptyUserpic> empty;
 	uint32 paletteVersion : 30 = 0;
 	uint32 shape : 2 = 0;
+	uint8 ayuState = 0xFF;
 };
 
 [[nodiscard]] bool PeerUserpicLoading(const PeerUserpicView &view);

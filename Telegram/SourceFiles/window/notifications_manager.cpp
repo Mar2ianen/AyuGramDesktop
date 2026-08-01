@@ -33,7 +33,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "core/application.h"
-#include "core/version.h"
 #include "mainwindow.h"
 #include "api/api_reactions_notify_settings.h"
 #include "api/api_updates.h"
@@ -48,6 +47,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QWindow>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/utils/telegram_helpers.h"
 
 #if __has_include(<gio/gio.hpp>)
 #include <gio/gio.hpp>
@@ -69,37 +72,6 @@ constexpr auto kSystemAlertDuration = crl::time(1000);
 #else // !Q_OS_MAC
 constexpr auto kSystemAlertDuration = crl::time(0);
 #endif // Q_OS_MAC
-
-base::options::toggle OptionCustomNotification({
-	.id = kOptionCustomNotification,
-	.name = "Force non-native notifications availability",
-	.description = "Allow to disable native notifications"
-		" even if custom notifications are broken on this platform",
-	.scope = [] {
-		return Platform::Notifications::Enforced();
-	},
-});
-
-base::options::toggle OptionGNotification({
-	.id = kOptionGNotification,
-	.name = "GNotification",
-	.description = "Force enable GLib's GNotification."
-		" When disabled, autodetect is used.",
-	.scope = [] {
-#if __has_include(<gio/gio.hpp>)
-		using namespace gi::repository;
-		return bool(Gio::Application::get_default());
-#else // __has_include(<gio/gio.hpp>)
-		return false;
-#endif // __has_include(<gio/gio.hpp>)
-	},
-});
-
-base::options::toggle HideReplyButtonOption({
-	.id = kOptionHideReplyButton,
-	.name = "Hide reply button",
-	.description = "Hide reply button in notifications.",
-});
 
 [[nodiscard]] QString PlaceholderReactionText() {
 	static const auto result = QString::fromUtf8("\xf0\x9f\x92\xad");
@@ -171,8 +143,42 @@ base::options::toggle HideReplyButtonOption({
 } // namespace
 
 const char kOptionCustomNotification[] = "custom-notification";
+
+base::options::toggle OptionCustomNotification({
+	.id = kOptionCustomNotification,
+	.name = "Force non-native notifications availability",
+	.description = "Allow to disable native notifications"
+		" even if custom notifications are broken on this platform",
+	.scope = [] {
+		return Platform::Notifications::Enforced();
+	},
+	.restartRequired = true,
+});
+
 const char kOptionGNotification[] = "gnotification";
 const char kOptionHideReplyButton[] = "hide-reply-button";
+
+base::options::toggle OptionGNotification({
+	.id = kOptionGNotification,
+	.name = "GNotification",
+	.description = "Force enable GLib's GNotification."
+		" When disabled, autodetect is used.",
+	.scope = [] {
+#if __has_include(<gio/gio.hpp>)
+		using namespace gi::repository;
+		return bool(Gio::Application::get_default());
+#else // __has_include(<gio/gio.hpp>)
+		return false;
+#endif // __has_include(<gio/gio.hpp>)
+	},
+	.restartRequired = true,
+});
+
+base::options::toggle HideReplyButtonOption({
+	.id = kOptionHideReplyButton,
+	.name = "Hide reply button",
+	.description = "Hide reply button in notifications.",
+});
 
 struct System::Waiter {
 	NotificationInHistoryKey key;
@@ -207,13 +213,6 @@ System::System()
 			|| type == ChangeType::CountMessages) {
 			Core::App().domain().notifyUnreadBadgeChanged();
 		}
-	}, lifetime());
-
-	rpl::merge(
-		OptionCustomNotification.changes(),
-		OptionGNotification.changes()
-	 ) | rpl::on_next([=] {
-		createManager();
 	}, lifetime());
 }
 
@@ -392,6 +391,12 @@ System::Timing System::countTiming(
 	} else if (cOtherOnline() >= t) {
 		delay = config.notifyDefaultDelay;
 	}
+
+	const auto &settings = AyuSettings::getInstance();
+	if (settings.disableNotificationsDelay()) {
+		delay = minimalDelay;
+	}
+
 	return {
 		.delay = delay,
 		.when = ms + delay,
@@ -426,6 +431,10 @@ void System::schedule(Data::ItemNotification notification) {
 	const auto thread = item->notificationThread();
 	const auto skip = skipNotification(notification);
 	if (skip.value == SkipState::Skip) {
+		thread->popNotification(notification);
+		return;
+	}
+	if (isMessageHidden(item)) {
 		thread->popNotification(notification);
 		return;
 	}
@@ -1172,9 +1181,16 @@ TextWithEntities Manager::ComposeReactionNotification(
 		}
 		return simple(tr::lng_reaction_document);
 	} else if (const auto contact = media->sharedContact()) {
-		const auto name = langFullName(
-			contact->firstName,
-			contact->lastName);
+		const auto name = contact->firstName.isEmpty()
+			? contact->lastName
+			: contact->lastName.isEmpty()
+			? contact->firstName
+			: tr::lng_full_name(
+				tr::now,
+				lt_first_name,
+				contact->firstName,
+				lt_last_name,
+				contact->lastName);
 		return tr::lng_reaction_contact(
 			tr::now,
 			lt_reaction,
@@ -1612,7 +1628,7 @@ void NativeManager::doShowNotification(NotificationFields &&fields) {
 		});
 	} : Fn<NotificationSound()>();
 	auto actions = std::vector<NotificationAction>();
-	if (AllowNotificationActions(peer) && !options.hideMarkAsRead) {
+	if (AllowNotificationActions(peer)) {
 		if (const auto markup = item->inlineReplyMarkup()) {
 			using ButtonType = HistoryMessageMarkupButton::Type;
 			const auto &rows = markup->data.rows;

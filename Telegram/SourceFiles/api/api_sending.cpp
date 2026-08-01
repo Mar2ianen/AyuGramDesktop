@@ -19,7 +19,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_file_origin.h"
 #include "data/data_histories.h"
 #include "data/data_changes.h"
-#include "data/components/ephemeral_messages.h"
 #include "data/stickers/data_stickers.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -34,6 +33,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_upload.h"
 #include "mainwidget.h"
 #include "apiwrap.h"
+
+// AyuGram includes
+#include "ayu/utils/telegram_helpers.h"
+
 
 namespace Api {
 namespace {
@@ -75,28 +78,6 @@ void SendSimpleMedia(SendAction action, MTPInputMedia inputMedia) {
 	action.clearDraft = false;
 	action.generateLocal = false;
 	api->sendAction(action);
-
-	if (!action.options.scheduled
-		&& !action.options.shortcutId
-		&& session->ephemeralMessages().sendSimpleMedia(
-			history,
-			action.replyTo,
-			inputMedia)) {
-		api->finishForwarding(action);
-		return;
-	}
-
-	if (action.replyTo.messageId
-		&& !IsServerMsgId(action.replyTo.messageId.msg)
-		&& !session->data().message(action.replyTo.messageId)) {
-		action.replyTo = {
-			.messageId = (action.replyTo.topicRootId
-				? FullMsgId(peer->id, action.replyTo.topicRootId)
-				: FullMsgId()),
-			.topicRootId = action.replyTo.topicRootId,
-			.monoforumPeerId = action.replyTo.monoforumPeerId,
-		};
-	}
 
 	const auto randomId = base::RandomValue<uint64>();
 
@@ -183,6 +164,8 @@ void SendExistingMedia(
 		Fn<MTPInputMedia()> inputMedia,
 		Data::FileOrigin origin,
 		std::optional<MsgId> localMessageId) {
+	applyGhostScheduling(&message.action.history->session(), message.action.options);
+
 	const auto history = message.action.history;
 	const auto peer = history->peer;
 	const auto session = &history->session();
@@ -206,14 +189,6 @@ void SendExistingMedia(
 		flags |= MessageFlag::HasReplyInfo;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to;
 	}
-	if (!action.options.scheduled
-		&& !action.options.shortcutId
-		&& session->ephemeralMessages().wouldSendMedia(
-			peer,
-			action.replyTo,
-			message.textWithTags.text)) {
-		flags |= MessageFlag::Ephemeral;
-	}
 	const auto silentPost = ShouldSendSilent(peer, action.options);
 	InnerFillMessagePostFlags(action.options, peer, flags);
 	if (silentPost) {
@@ -228,9 +203,10 @@ void SendExistingMedia(
 		TextUtilities::ConvertTextTagsToEntities(message.textWithTags.tags)
 	};
 	TextUtilities::Trim(caption);
+	const auto captionNormalized = reverseLocalPremiumEmoji(caption, history);
 	auto sentEntities = EntitiesToMTP(
 		session,
-		caption.entities,
+		captionNormalized.entities,
 		ConvertOption::SkipLocal);
 	if (!sentEntities.v.isEmpty()) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_entities;
@@ -267,13 +243,12 @@ void SendExistingMedia(
 
 	session->data().registerMessageRandomId(randomId, newId);
 
-	const auto item = history->addNewLocalMessage({
+	history->addNewLocalMessage({
 		.id = newId.msg,
 		.flags = flags,
 		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
 		.date = NewMessageDate(action.options),
-		.scheduleRepeatPeriod = action.options.scheduleRepeatPeriod,
 		.shortcutId = action.options.shortcutId,
 		.starsPaid = starsPaid,
 		.postAuthor = NewMessagePostAuthor(action),
@@ -281,15 +256,6 @@ void SendExistingMedia(
 		.suggest = HistoryMessageSuggestInfo(action.options),
 		.mediaSpoiler = action.options.mediaSpoiler,
 	}, media, caption);
-
-	if (session->ephemeralMessages().sendMedia(
-			item,
-			inputMedia(),
-			origin,
-			inputMedia)) {
-		api->finishForwarding(action);
-		return;
-	}
 
 	const auto performRequest = [=](const auto &repeatRequest) -> void {
 		auto &histories = history->owner().histories();
@@ -342,6 +308,25 @@ void SendExistingDocument(
 		MessageToSend &&message,
 		not_null<DocumentData*> document,
 		std::optional<MsgId> localMessageId) {
+	if (!document->sticker()
+		&& !document->isVideoMessage()
+		&& !document->isVoiceMessage()) {
+		const auto clearReplyTo = prependPseudoReply(message);
+		if (clearReplyTo) {
+			message.action.replyTo.messageId = FullMsgId(
+				message.action.replyTo.messageId.peer,
+				message.action.replyTo.topicRootId);
+		}
+	} else if (message.action.replyTo && message.action.history) {
+		if (const auto item = message.action.history->session().data().message(message.action.replyTo.messageId)) {
+			if (item->isDeleted()) {
+				message.action.replyTo.messageId = FullMsgId(
+					message.action.replyTo.messageId.peer,
+					message.action.replyTo.topicRootId);
+			}
+		}
+	}
+
 	const auto inputMedia = [=] {
 		return MTP_inputMediaDocument(
 			MTP_flags(message.action.options.mediaSpoiler
@@ -369,6 +354,13 @@ void SendExistingPhoto(
 		MessageToSend &&message,
 		not_null<PhotoData*> photo,
 		std::optional<MsgId> localMessageId) {
+	const auto clearReplyTo = prependPseudoReply(message);
+	if (clearReplyTo) {
+		message.action.replyTo.messageId = FullMsgId(
+			message.action.replyTo.messageId.peer,
+			message.action.replyTo.topicRootId);
+	}
+
 	const auto inputMedia = [=] {
 		return MTP_inputMediaPhoto(
 			MTP_flags(0),
@@ -483,7 +475,6 @@ bool SendDice(MessageToSend &message) {
 		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
 		.date = NewMessageDate(action.options),
-		.scheduleRepeatPeriod = action.options.scheduleRepeatPeriod,
 		.shortcutId = action.options.shortcutId,
 		.starsPaid = starsPaid,
 		.postAuthor = NewMessagePostAuthor(action),
@@ -594,6 +585,26 @@ void SendConfirmedFile(
 	const auto history = session->data().history(file->to.peer);
 	const auto peer = history->peer;
 
+	if (!isEditing
+		&& file->type != SendMediaType::Audio
+		&& file->type != SendMediaType::Round) {
+		const auto clearReplyTo = prependPseudoReply(
+			session, history, file->caption, file->to.replyTo);
+		if (clearReplyTo) {
+			file->to.replyTo.messageId = FullMsgId(
+				file->to.replyTo.messageId.peer,
+				file->to.replyTo.topicRootId);
+		}
+	} else if (!isEditing && file->to.replyTo) {
+		if (const auto item = session->data().message(file->to.replyTo.messageId)) {
+			if (item->isDeleted()) {
+				file->to.replyTo.messageId = FullMsgId(
+					file->to.replyTo.messageId.peer,
+					file->to.replyTo.topicRootId);
+			}
+		}
+	}
+
 	if (!isEditing) {
 		const auto histories = &session->data().histories();
 		file->to.replyTo.messageId = histories->convertTopicReplyToId(
@@ -626,16 +637,6 @@ void SendConfirmedFile(
 	auto flags = isEditing ? MessageFlags() : NewMessageFlags(peer);
 	if (file->to.replyTo) {
 		flags |= MessageFlag::HasReplyInfo;
-	}
-	if (!isEditing
-		&& !groupId
-		&& !file->to.options.scheduled
-		&& !file->to.options.shortcutId
-		&& session->ephemeralMessages().wouldSendMedia(
-			peer,
-			file->to.replyTo,
-			caption.text)) {
-		flags |= MessageFlag::Ephemeral;
 	}
 	FillMessagePostFlags(action, peer, flags);
 	if (file->to.options.scheduled) {
@@ -733,7 +734,6 @@ void SendConfirmedFile(
 			.from = NewMessageFromId(action),
 			.replyTo = file->to.replyTo,
 			.date = NewMessageDate(file->to.options),
-			.scheduleRepeatPeriod = file->to.options.scheduleRepeatPeriod,
 			.shortcutId = file->to.options.shortcutId,
 			.starsPaid = std::min(
 				history->peer->starsPerMessageChecked(),

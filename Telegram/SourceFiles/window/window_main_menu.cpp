@@ -68,10 +68,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_peer_menu.h"
 #include "window/window_session_controller.h"
 #include "styles/style_chat.h" // popupMenuExpandedSeparator
+#include "styles/style_info.h" // infoTopBarMenu
+#include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
 #include "styles/style_window.h"
-#include "styles/style_window_main_menu.h"
 
 #include <QtGui/QWindow>
 #include <QtGui/QScreen>
@@ -79,10 +80,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/utils/telegram_helpers.h"
+#include "boxes/abstract_box.h"
+#include "ayu/features/streamer_mode/streamer_mode.h"
+#include "styles/style_ayu_icons.h"
+#include "lang_auto.h"
+#include "ayu/ui/settings/settings_main.h"
+
 namespace Window {
 namespace {
 
-constexpr auto kPlayStatusLimit = 2;
+constexpr auto kPlayStatusLimit = 12;
 
 [[nodiscard]] bool CanCheckSpecialEvent() {
 	static const auto result = [] {
@@ -100,20 +110,9 @@ constexpr auto kPlayStatusLimit = 2;
 
 [[nodiscard]] rpl::producer<TextWithEntities> SetStatusLabel(
 		not_null<Main::Session*> session) {
-	const auto self = session->user();
-	return session->changes().peerFlagsValue(
-		self,
-		Data::PeerUpdate::Flag::EmojiStatus
-	) | rpl::map([=] {
-		return !!self->emojiStatusId();
-	}) | rpl::distinct_until_changed() | rpl::map([](bool has) {
-		const auto makeLink = [](const QString &text) {
-			return tr::link(text);
-		};
-		return (has
-			? tr::lng_menu_change_status
-			: tr::lng_menu_set_status)(makeLink);
-	}) | rpl::flatten_latest();
+	return tr::ayu_AyuPreferences() | rpl::map([](const QString& text) {
+		return tr::link(text);
+	});
 }
 
 } // namespace
@@ -323,6 +322,15 @@ MainMenu::MainMenu(
 	[=] { return controller->isGifPausedAtLeastFor(GifPauseReason::Layer); },
 	kPlayStatusLimit,
 	Info::Profile::BadgeType::Premium))
+, _exteraBadge(std::make_unique<Info::Profile::Badge>(
+	this,
+	st::infoPeerBadge,
+	&controller->session(),
+	ExteraBadgeTypeFromPeer(controller->session().user()),
+	nullptr,
+	[=] { return controller->isGifPausedAtLeastFor(GifPauseReason::Layer); },
+	0,
+	Info::Profile::BadgeType::Extera | Info::Profile::BadgeType::ExteraSupporter | Info::Profile::BadgeType::ExteraCustom))
 , _scroll(this, st::defaultSolidScroll)
 , _inner(_scroll->setOwnedWidget(
 	object_ptr<Ui::VerticalLayout>(_scroll.data())))
@@ -383,8 +391,8 @@ MainMenu::MainMenu(
 	parentResized();
 
 	_telegram->setMarkedText(tr::link(
-		u"Telegram Desktop"_q,
-		u"https://desktop.telegram.org"_q));
+		u"AyuGram Desktop"_q,
+		u"https://ayugram.one"_q));
 	_telegram->setLinksTrusted();
 	_version->setMarkedText(
 		tr::link(
@@ -403,18 +411,28 @@ MainMenu::MainMenu(
 	_version->setLink(
 		2,
 		std::make_shared<LambdaClickHandler>([=] {
-			controller->show(Box(AboutBox));
+			controller->show(Box(AboutBox, controller));
 		}));
 
 	rpl::combine(
 		_toggleAccounts->rightSkipValue(),
-		rpl::single(rpl::empty) | rpl::then(_badge->updated())
+		rpl::single(rpl::empty) | rpl::then(_badge->updated()),
+		rpl::single(rpl::empty) | rpl::then(_exteraBadge->updated())
 	) | rpl::on_next([=] {
 		moveBadge();
 	}, lifetime());
 	_badge->setPremiumClickCallback([=] {
 		chooseEmojiStatus();
 	});
+	{
+		const auto user = controller->session().user();
+		const auto isCustomBadge = isCustomBadgePeer(getBareID(user));
+		const auto isExtera = isExteraPeer(getBareID(user));
+		const auto isSupporter = isSupporterPeer(getBareID(user));
+		if (isExtera || isSupporter || isCustomBadge) {
+			_exteraBadge->setPremiumClickCallback(badgeClickHandler(user));
+		}
+	}
 
 	_controller->session().downloaderTaskFinished(
 	) | rpl::on_next([=] {
@@ -465,19 +483,42 @@ MainMenu::MainMenu(
 MainMenu::~MainMenu() = default;
 
 void MainMenu::moveBadge() {
-	if (!_badge->widget()) {
+	const auto badgeWidth = _badge->widget()
+		? _badge->widget()->width()
+		: 0;
+	const auto exteraBadgeWidth = _exteraBadge->widget()
+		? _exteraBadge->widget()->width()
+		: 0;
+	if (!badgeWidth && !exteraBadgeWidth) {
 		return;
 	}
+	const auto nameGap = badgeWidth ? st::semiboldFont->spacew : 0;
+	const auto exteraGap = exteraBadgeWidth
+		? st::infoVerifiedCheckPosition.x()
+		: 0;
+	const auto reserved = nameGap
+		+ badgeWidth
+		+ exteraGap
+		+ exteraBadgeWidth;
 	const auto available = width()
 		- st::mainMenuCoverNameLeft
 		- _toggleAccounts->rightSkip()
-		- _badge->widget()->width();
-	const auto left = st::mainMenuCoverNameLeft
-		+ std::min(_name.maxWidth() + st::semiboldFont->spacew, available);
-	_badge->move(
-		left,
-		st::mainMenuCoverNameTop,
-		st::mainMenuCoverNameTop + st::semiboldFont->height);
+		- reserved;
+	const auto nameLeft = st::mainMenuCoverNameLeft;
+	const auto nameEnd = nameLeft
+		+ std::min(_name.maxWidth(), available);
+	if (_badge->widget()) {
+		_badge->move(
+			nameEnd + nameGap,
+			st::mainMenuCoverNameTop,
+			st::mainMenuCoverNameTop + st::semiboldFont->height);
+	}
+	if (_exteraBadge->widget()) {
+		_exteraBadge->move(
+			nameEnd + nameGap + badgeWidth,
+			st::mainMenuCoverNameTop,
+			st::mainMenuCoverNameTop + st::semiboldFont->height);
+	}
 }
 
 void MainMenu::setupArchive() {
@@ -625,7 +666,7 @@ void MainMenu::setupAccountsToggle() {
 
 void MainMenu::setupSetEmojiStatus() {
 	_setEmojiStatus->overrideLinkClickHandler([=] {
-		chooseEmojiStatus();
+		_controller->showSettings(Settings::AyuMain::Id());
 	});
 }
 
@@ -648,6 +689,8 @@ void MainMenu::showFinished() {
 void MainMenu::setupMenu() {
 	using namespace Settings;
 
+	const auto &settings = AyuSettings::getInstance();
+
 	const auto controller = _controller;
 	const auto addAction = [&](
 			rpl::producer<QString> text,
@@ -659,6 +702,7 @@ void MainMenu::setupMenu() {
 			std::move(descriptor));
 	};
 	if (!_controller->session().supportMode()) {
+		if (settings.showMyProfileInDrawer())
 		_menu->add(
 			CreateButtonWithIcon(
 				_menu,
@@ -670,12 +714,15 @@ void MainMenu::setupMenu() {
 				Info::Stories::Make(controller->session().user()));
 		});
 
+		if (settings.showBotsInDrawer())
 		SetupMenuBots(_menu, controller);
 
+		if (settings.showMyProfileInDrawer() || settings.showBotsInDrawer())
 		_menu->add(
 			object_ptr<Ui::PlainShadow>(_menu),
 			{ 0, st::mainMenuSkip, 0, st::mainMenuSkip });
 
+		if (settings.showNewGroupInDrawer())
 		AddMyChannelsBox(addAction(
 			tr::lng_create_group_title(),
 			{ &st::menuIconGroups }
@@ -685,6 +732,7 @@ void MainMenu::setupMenu() {
 			}
 		});
 
+		if (settings.showNewChannelInDrawer())
 		AddMyChannelsBox(addAction(
 			tr::lng_create_channel_title(),
 			{ &st::menuIconChannel }
@@ -694,24 +742,75 @@ void MainMenu::setupMenu() {
 			}
 		});
 
+		if (settings.showContactsInDrawer())
 		addAction(
 			tr::lng_menu_contacts(),
 			{ &st::menuIconUserShow }
 		)->setClickedCallback([=] {
 			controller->show(PrepareContactsBox(controller));
 		});
+		if (settings.showCallsInDrawer())
 		addAction(
 			tr::lng_menu_calls(),
 			{ &st::menuIconPhone }
 		)->setClickedCallback([=] {
 			::Calls::ShowCallsBox(controller);
 		});
+		if (settings.showSavedMessagesInDrawer())
 		addAction(
 			tr::lng_saved_messages(),
 			{ &st::menuIconSavedMessages }
 		)->setClickedCallback([=] {
 			controller->showPeerHistory(controller->session().user());
 		});
+
+		if (settings.showLReadToggleInDrawer()) {
+			addAction(
+				tr::ayu_LReadMessages(),
+				{&st::ayuLReadMenuIcon}
+			)->setClickedCallback([=]() mutable
+			{
+				auto &ghost = AyuSettings::ghost(&controller->session());
+				const auto prev = ghost.sendReadMessages();
+				ghost.setSendReadMessages(false);
+
+				const auto chats = controller->session().data().chatsList();
+				MarkAsReadChatList(chats);
+
+				ghost.setSendReadMessages(prev);
+			});
+		}
+
+		if (settings.showSReadToggleInDrawer()) {
+			auto callback = [=](Fn<void()> &&close) mutable {
+				auto &ghost = AyuSettings::ghost(&controller->session());
+				const auto prev = ghost.sendReadMessages();
+				ghost.setSendReadMessages(true);
+
+				auto chats = controller->session().data().chatsList();
+				MarkAsReadChatList(chats);
+
+				// slight delay for forums to send packets
+				dispatchToMainThread(crl::guard(controller, [=] {
+					auto &ghost = AyuSettings::ghost(&controller->session());
+					ghost.setSendReadMessages(prev);
+				}), 200);
+				close();
+			};
+
+			addAction(
+				tr::ayu_SReadMessages(),
+				{&st::ayuSReadMenuIcon}
+			)->setClickedCallback([=]
+			{
+				auto box = Ui::MakeConfirmBox({
+					.text = tr::ayu_ReadConfirmationBoxQuestion(),
+					.confirmed = callback,
+					.confirmText = tr::ayu_ReadConfirmationBoxActionText()
+				});
+				Ui::show(std::move(box));
+			});
+		}
 	} else {
 		addAction(
 			tr::lng_profile_add_contact(),
@@ -743,6 +842,8 @@ void MainMenu::setupMenu() {
 		controller->showSettings();
 	});
 
+	if (settings.showNightModeToggleInDrawer()) {
+
 	_nightThemeToggle = addAction(
 		tr::lng_menu_night_mode(),
 		{ &st::menuIconNightMode }
@@ -772,7 +873,6 @@ void MainMenu::setupMenu() {
 			&_controller->window(),
 			toggle);
 	}, _nightThemeToggle->lifetime());
-
 	Core::App().settings().systemDarkModeValue(
 	) | rpl::on_next([=](std::optional<bool> darkMode) {
 		const auto darkModeEnabled
@@ -781,6 +881,49 @@ void MainMenu::setupMenu() {
 			_nightThemeSwitches.fire_copy(*darkMode);
 		}
 	}, _nightThemeToggle->lifetime());
+
+	}
+
+	if (settings.showGhostToggleInDrawer()) {
+		auto ghostActiveChanges = AyuSettings::getInstance().useGlobalGhostModeValue()
+			| rpl::map([controller = _controller](bool) {
+				return AyuSettings::ghost(&controller->session()).ghostModeActiveValue();
+			})
+			| rpl::flatten_latest();
+
+		const auto ghostModeToggle = addAction(
+			tr::ayu_GhostModeToggle(),
+			{&st::ayuGhostIcon}
+		)->toggleOn(std::move(ghostActiveChanges));
+
+		ghostModeToggle->toggledChanges(
+		) | rpl::on_next(
+			[controller = _controller](bool ghostMode)
+			{
+				auto &ghost = AyuSettings::ghost(&controller->session());
+				ghost.setGhostModeEnabled(ghostMode);
+			},
+			ghostModeToggle->lifetime());
+	}
+
+	if (settings.showStreamerToggleInDrawer()) {
+		const auto streamerModeToggle = addAction(
+			tr::ayu_StreamerModeToggle(),
+			{&st::ayuStreamerModeMenuIcon}
+		)->toggleOn(rpl::single(AyuFeatures::StreamerMode::isEnabled()));
+
+		streamerModeToggle->toggledChanges(
+		) | rpl::on_next(
+			[=](bool enabled)
+			{
+				if (enabled) {
+					AyuFeatures::StreamerMode::enable();
+				} else {
+					AyuFeatures::StreamerMode::disable();
+				}
+			},
+			streamerModeToggle->lifetime());
+	}
 }
 
 void MainMenu::resizeEvent(QResizeEvent *e) {
@@ -828,28 +971,10 @@ void MainMenu::chooseEmojiStatus() {
 	if (_controller->showFrozenError()) {
 		return;
 	} else if (const auto widget = _badge->widget()) {
-		setupEmojiStatusDismiss();
 		_emojiStatusPanel->show(_controller, widget, _badge->sizeTag());
 	} else {
 		ShowPremiumPreviewBox(_controller, PremiumFeature::EmojiStatus);
 	}
-}
-
-void MainMenu::setupEmojiStatusDismiss() {
-	if (_emojiStatusDismissSetup) {
-		return;
-	}
-	_emojiStatusDismissSetup = true;
-
-	base::install_event_filter(this, parentWidget(), [=](
-			not_null<QEvent*> e) {
-		if (e->type() != QEvent::MouseButtonPress
-			|| !_emojiStatusPanel->shown()) {
-			return base::EventFilterResult::Continue;
-		}
-		_emojiStatusPanel->hideAnimated();
-		return base::EventFilterResult::Cancel;
-	});
 }
 
 bool MainMenu::eventHook(QEvent *event) {
@@ -861,10 +986,6 @@ bool MainMenu::eventHook(QEvent *event) {
 		QGuiApplication::sendEvent(_inner, event);
 	}
 	return RpWidget::eventHook(event);
-}
-
-void MainMenu::hideEvent(QHideEvent *e) {
-	_emojiStatusPanel->hideFast();
 }
 
 void MainMenu::paintEvent(QPaintEvent *e) {
@@ -894,14 +1015,25 @@ void MainMenu::drawName(Painter &p) {
 	}
 	p.setFont(st::semiboldFont);
 	p.setPen(st::windowBoldFg);
+	const auto badgeWidth = _badge->widget()
+		? _badge->widget()->width()
+		: 0;
+	const auto exteraBadgeWidth = _exteraBadge->widget()
+		? _exteraBadge->widget()->width()
+		: 0;
+	const auto nameGap = badgeWidth ? st::semiboldFont->spacew : 0;
+	const auto exteraGap = exteraBadgeWidth
+		? st::infoVerifiedCheckPosition.x()
+		: 0;
+	const auto reserved = nameGap
+		+ badgeWidth
+		+ exteraGap
+		+ exteraBadgeWidth;
 	_name.drawLeftElided(
 		p,
 		st::mainMenuCoverNameLeft,
 		st::mainMenuCoverNameTop,
-		(widthText
-			- (_badge->widget()
-				? (st::semiboldFont->spacew + _badge->widget()->width())
-				: 0)),
+		widthText - reserved,
 		width());
 }
 
@@ -1025,8 +1157,8 @@ void MainMenu::setupSwipe() {
 		}
 	};
 
-	auto init = [=](Ui::Controls::SwipeHandlerInitData data) {
-		if (data.direction != Qt::LeftToRight) {
+	auto init = [=](int, Qt::LayoutDirection direction) {
+		if (direction != Qt::LeftToRight) {
 			return Ui::Controls::SwipeHandlerFinishData();
 		}
 		if (_emojiStatusPanel && _emojiStatusPanel->hasFocus()) {

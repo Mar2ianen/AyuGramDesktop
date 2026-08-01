@@ -56,6 +56,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <kurlmimedata.h>
 
+// AyuGram includes
+#include "ayu/ui/ayu_logo.h"
+
+
 namespace Window {
 namespace {
 
@@ -85,9 +89,6 @@ base::options::toggle OptionNewWindowsSizeAsFirst({
 base::options::toggle OptionDisableTouchbar({
 	.id = kOptionDisableTouchbar,
 	.name = "Disable Touch Bar (macOS only).",
-#if defined Q_OS_MAC && defined Q_PROCESSOR_ARM
-	.defaultValue = true,
-#endif // Q_OS_MAC && Q_PROCESSOR_ARM
 	.scope = [] {
 #ifdef Q_OS_MAC
 		return true;
@@ -125,12 +126,15 @@ base::options::toggle OptionDisableTouchbar({
 const char kOptionNewWindowsSizeAsFirst[] = "new-windows-size-as-first";
 const char kOptionDisableTouchbar[] = "touchbar-disabled";
 
-const QImage &Logo() {
-	static const auto result = QImage(u":/gui/art/logo_256.png"_q);
-	return result;
+QImage Logo() {
+	return AyuAssets::currentAppLogo();
 }
 
-const QImage &LogoNoMargin() {
+QImage LogoNoMargin() {
+	return AyuAssets::currentAppLogo();
+}
+
+const QImage &LogoTelegramDefault() {
 	static const auto result = QImage(u":/gui/art/logo_256_no_margin.png"_q);
 	return result;
 }
@@ -186,41 +190,27 @@ void OverrideApplicationIcon(QImage image) {
 	OverridenIcon() = std::move(image);
 }
 
-QIcon CreateSupportIcon(Main::Session *session) {
-	const auto support = (session && session->supportMode());
-	if (!support) {
-		return QIcon();
-	}
-	auto overriden = OverridenIcon();
-	auto image = overriden.isNull()
-		? Platform::DefaultApplicationIcon()
-		: overriden;
-	ConvertIconToBlack(image);
-	return QIcon(Ui::PixmapFromImage(std::move(image)));
+QIcon CreateOfficialIcon(Main::Session *session) {
+	return QIcon(Ui::PixmapFromImage(AyuAssets::currentAppLogo()));
 }
 
 QIcon CreateIcon(Main::Session *session, bool returnNullIfDefault) {
-	const auto supportIcon = CreateSupportIcon(session);
-	if (!supportIcon.isNull() || returnNullIfDefault) {
-		return supportIcon;
+	const auto officialIcon = CreateOfficialIcon(session);
+	if (!officialIcon.isNull() || returnNullIfDefault) {
+		return officialIcon;
 	}
 
-	const auto officialIcon = QIcon(
-		Ui::PixmapFromImage(base::duplicate(Logo())));
+	auto result = QIcon(Ui::PixmapFromImage(base::duplicate(Logo())));
 
 	if constexpr (!Platform::IsLinux()) {
-		return officialIcon;
+		return result;
 	}
 
 	const auto iconFromTheme = QIcon::fromTheme(
 		Platform::ApplicationIconName(),
-		officialIcon);
+		result);
 
-	if (!Platform::IsX11()) {
-		return iconFromTheme;
-	}
-
-	QIcon result;
+	result = QIcon();
 
 	static const auto iconSizes = {
 		16,
@@ -855,7 +845,7 @@ void MainWindow::updateTitle() {
 		: Dialogs::Key();
 	const auto thread = key ? key.thread() : nullptr;
 	if (!thread) {
-		setTitle((user.isEmpty() ? u"Telegram"_q : user) + added);
+		setTitle((user.isEmpty() ? u"AyuGram"_q : user) + added);
 		return;
 	}
 	const auto history = thread->owningHistory();

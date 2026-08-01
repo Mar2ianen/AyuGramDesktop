@@ -16,7 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/crash_reports.h"
 #include "core/update_checker.h"
 #include "core/sandbox.h"
-#include "core/version.h"
 #include "base/concurrent_timer.h"
 #include "base/options.h"
 
@@ -36,7 +35,7 @@ base::options::toggle OptionHighDpiDownscale({
 		" (another approach, likely better quality).",
 	.scope = [] {
 		return !Platform::IsMac()
-			&& QLibraryInfo::version() >= QVersionNumber(6, 8);
+			&& QLibraryInfo::version() >= QVersionNumber(6, 4);
 	},
 	.restartRequired = true,
 });
@@ -336,7 +335,7 @@ void Launcher::init() {
 	prepareSettings();
 	initQtMessageLogging();
 
-	QApplication::setApplicationName(u"TelegramDesktop"_q);
+	QApplication::setApplicationName(u"AyuGramDesktop"_q);
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	// fallback session management is useless for tdesktop since it doesn't have
@@ -362,8 +361,8 @@ void Launcher::initHighDpi() {
 
 	if (OptionHighDpiDownscale.value()) {
 		qputenv("QT_WIDGETS_HIGHDPI_DOWNSCALE", "1");
-	} else {
-		qunsetenv("QT_WIDGETS_HIGHDPI_DOWNSCALE");
+		qputenv("QT_WIDGETS_RHI", "1");
+		qputenv("QT_WIDGETS_RHI_BACKEND", "opengl");
 	}
 
 	if (OptionFractionalScalingEnabled.value()
@@ -381,6 +380,8 @@ int Launcher::exec() {
 
 	if (cLaunchMode() == LaunchModeFixPrevious) {
 		return psFixPrevious();
+	} else if (cLaunchMode() == LaunchModeCleanup) {
+		return psCleanup();
 	}
 
 	// Must be started before Platform is started.
@@ -548,7 +549,6 @@ void Launcher::processArguments() {
 	};
 	auto parseMap = std::map<QByteArray, KeyFormat> {
 		{ "-debug"          , KeyFormat::NoValues },
-		{ "-testagent"      , KeyFormat::NoValues },
 		{ "-key"            , KeyFormat::OneValue },
 		{ "-autostart"      , KeyFormat::NoValues },
 		{ "-fixprevious"    , KeyFormat::NoValues },
@@ -557,6 +557,7 @@ void Launcher::processArguments() {
 		{ "-tosettings"     , KeyFormat::NoValues },
 		{ "-startintray"    , KeyFormat::NoValues },
 		{ "-quit"           , KeyFormat::NoValues },
+		{ "-ghost"          , KeyFormat::NoValues },
 		{ "-workdir"        , KeyFormat::OneValue },
 		{ "--"              , KeyFormat::AllLeftValues },
 		{ "-scale"          , KeyFormat::OneValue },
@@ -591,8 +592,7 @@ void Launcher::processArguments() {
 	}
 
 	static const auto RegExp = QRegularExpression("[^a-z0-9\\-_]");
-	gTestAgent = parseResult.contains("-testagent");
-	gDebugMode = parseResult.contains("-debug") || gTestAgent;
+	gDebugMode = parseResult.contains("-debug");
 	gKeyFile = parseResult
 		.value("-key", {})
 		.join(QString())
@@ -606,6 +606,7 @@ void Launcher::processArguments() {
 	gStartToSettings = parseResult.contains("-tosettings");
 	gStartInTray = parseResult.contains("-startintray");
 	gQuit = parseResult.contains("-quit");
+	gGhost = parseResult.contains("-ghost");
 	_customWorkingDir = parseResult.value("-workdir", {}).join(QString());
 	if (!_customWorkingDir.isEmpty()) {
 		_customWorkingDir = QDir(_customWorkingDir).absolutePath() + '/';

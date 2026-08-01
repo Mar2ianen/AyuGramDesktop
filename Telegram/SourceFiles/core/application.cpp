@@ -29,7 +29,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/launcher.h"
 #include "core/proxy_rotation_manager.h"
 #include "core/ui_integration.h"
-#include "core/version.h"
 #include "chat_helpers/emoji_keywords.h"
 #include "chat_helpers/stickers_emoji_image_loader.h"
 #include "base/platform/base_platform_global_shortcuts.h"
@@ -46,8 +45,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "iv/iv_delegate_impl.h"
 #include "iv/iv_instance.h"
 #include "iv/iv_data.h"
-#include "iv/editor/iv_editor_session.h"
-#include "iv/editor/iv_editor_window.h"
 #include "lang/lang_translator.h"
 #include "lang/lang_cloud_manager.h"
 #include "lang/lang_hardcoded.h"
@@ -94,13 +91,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/accessible/ui_accessible_factory.h"
 #include "ui/boxes/confirm_box.h"
 #include "core/cached_webview_availability.h"
+#include "styles/style_window.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
+#include <QtGui/QWindow>
 
 #include <ksandbox.h>
+
+// AyuGram includes
+#include "ayu/ayu_infra.h"
+#include "ayu/features/streamer_mode/streamer_mode.h"
+
 
 namespace Core {
 namespace {
@@ -215,7 +219,6 @@ void Application::closeAdditionalWindows() {
 		}
 	}
 	_iv->closeAll();
-	Iv::Editor::CloseAllWindows();
 }
 
 Application::~Application() {
@@ -294,6 +297,7 @@ void Application::run() {
 	_translator = std::make_unique<Lang::Translator>();
 	QCoreApplication::instance()->installTranslator(_translator.get());
 
+	AyuInfra::init();
 	style::StartManager(cScale());
 	Ui::Accessible::Init();
 	Ui::InitTextOptions();
@@ -533,6 +537,10 @@ void Application::processCreatedWindow(
 		not_null<Window::Controller*> window) {
 	window->openInMediaViewRequests(
 	) | rpl::start_to_stream(_openInMediaViewRequests, window->lifetime());
+
+	if (AyuFeatures::StreamerMode::isEnabled()) {
+		AyuFeatures::StreamerMode::hideWidgetWindow(window->widget());
+	}
 }
 
 void Application::startMediaView() {
@@ -542,7 +550,6 @@ void Application::startMediaView() {
 	// only after first show and then hide.
 	InvokeQueued(this, [=] {
 		_mediaView = std::make_unique<Media::View::OverlayWidget>();
-		_mediaView->setSystemMediaControls(_mediaControlsManager.get());
 	});
 #elif defined Q_OS_WIN // Q_OS_MAC || Q_OS_WIN
 	// On Windows we needed such hack for the main window, otherwise
@@ -550,11 +557,9 @@ void Application::startMediaView() {
 	// was broken / lost to some invalid values.
 	const auto current = _lastActivePrimaryWindow->widget()->geometry();
 	_mediaView = std::make_unique<Media::View::OverlayWidget>();
-	_mediaView->setSystemMediaControls(_mediaControlsManager.get());
 	_lastActivePrimaryWindow->widget()->Ui::RpWidget::setGeometry(current);
 #else
 	_mediaView = std::make_unique<Media::View::OverlayWidget>();
-	_mediaView->setSystemMediaControls(_mediaControlsManager.get());
 #endif // Q_OS_MAC || Q_OS_WIN
 }
 
@@ -730,9 +735,10 @@ bool Application::eventFilter(QObject *object, QEvent *e) {
 	} break;
 
 	case QEvent::ThemeChange: {
-		if (Platform::IsLinux() && object == qApp) {
-			refreshApplicationIcon();
-			tray().updateIconCounters();
+		if (Platform::IsLinux()
+				&& object == QGuiApplication::allWindows().constFirst()) {
+			Core::App().refreshApplicationIcon();
+			Core::App().tray().updateIconCounters();
 		}
 	} break;
 	}
@@ -1158,25 +1164,7 @@ void Application::checkStartUrls() {
 	if (!cRefStartUrls().isEmpty()
 		&& _lastActivePrimaryWindow
 		&& !_lastActivePrimaryWindow->locked()) {
-		auto interprets = QStringList();
-		auto paths = QStringList();
-		cRefStartUrls() = ranges::views::all(
-			cRefStartUrls()
-		) | ranges::views::filter([&](const QUrl &url) {
-			if (url.scheme() == u"interpret"_q) {
-				interprets.append(url.path());
-				return false;
-			} else if (url.isLocalFile()) {
-				paths.append(url.toLocalFile());
-				return false;
-			}
-			return true;
-		}) | ranges::to<QList<QUrl>>;
-		if (!interprets.isEmpty() || !paths.isEmpty()) {
-			_lastActivePrimaryWindow->widget()->handleStartFiles(
-				std::move(interprets),
-				std::move(paths));
-		}
+		_lastActivePrimaryWindow->widget()->sendPaths();
 	}
 }
 
@@ -1204,7 +1192,7 @@ bool Application::openInternalUrl(const QString &url, QVariant context) {
 }
 
 QString Application::changelogLink() const {
-	return u"https://telegramdesktop.github.io/tdesktop/changelog/"_q;
+	return u"https://github.com/AyuGram/AyuGramDesktop/releases"_q;
 }
 
 bool Application::openCustomUrl(
@@ -1397,13 +1385,6 @@ Window::Controller *Application::activePrimaryWindow() const {
 	return _lastActivePrimaryWindow;
 }
 
-void Application::setActivePrimaryWindow(
-		not_null<Window::Controller*> window) {
-	if (window->isPrimary()) {
-		_lastActivePrimaryWindow = window;
-	}
-}
-
 Window::Controller *Application::separateWindowFor(
 		Window::SeparateId id) const {
 	for (const auto &[existingId, window] : _windows) {
@@ -1422,9 +1403,7 @@ Window::Controller *Application::ensureSeparateWindowFor(
 		return window;
 	};
 	if (const auto existing = separateWindowFor(id)) {
-		if (id.thread
-			&& id.type == Window::SeparateType::Chat
-			&& !passcodeLocked()) {
+		if (id.thread && id.type == Window::SeparateType::Chat) {
 			existing->sessionController()->showThread(
 				id.thread,
 				showAtMsgId,
@@ -1438,9 +1417,6 @@ Window::Controller *Application::ensureSeparateWindowFor(
 		std::make_unique<Window::Controller>(id, showAtMsgId)
 	).first->second.get();
 	processCreatedWindow(result);
-	if (passcodeLocked()) {
-		result->setupPasscodeLock();
-	}
 	result->firstShow();
 	result->finishFirstShow();
 	return activate(result);
@@ -1685,9 +1661,7 @@ bool Application::closeActiveWindow() {
 	if (_mediaView && _mediaView->isActive()) {
 		_mediaView->close();
 		return true;
-	} else if (_iv->closeActive()
-		|| Iv::Editor::CloseActiveWindow()
-		|| calls().closeCurrentActiveCall()) {
+	} else if (_iv->closeActive() || calls().closeCurrentActiveCall()) {
 		return true;
 	} else if (const auto window = activeWindow()) {
 		if (window->widget()->isActive()) {
@@ -1927,7 +1901,7 @@ void Application::RegisterUrlScheme() {
 		.arguments = arguments,
 		.protocol = u"tg"_q,
 		.protocolName = u"Telegram Link"_q,
-		.shortAppName = u"tdesktop"_q,
+		.shortAppName = u"AyuGram"_q,
 		.longAppName = QCoreApplication::applicationName(),
 		.displayAppName = AppName.utf16(),
 		.displayAppDescription = AppName.utf16(),

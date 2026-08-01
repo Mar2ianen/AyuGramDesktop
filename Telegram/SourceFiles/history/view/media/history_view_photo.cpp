@@ -12,7 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/history.h"
 #include "history/view/history_view_element.h"
-#include "history/view/history_view_message.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/media/history_view_media_common.h"
 #include "history/view/media/history_view_media_spoiler.h"
@@ -44,6 +43,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/ui_integration.h"
 #include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
+
+// AyuGram includes
+#include "ayu/features/message_shot/message_shot.h"
+#include "ayu/ui/ayu_userpic.h"
+
 
 namespace HistoryView {
 namespace {
@@ -52,41 +57,6 @@ constexpr auto kStoryWidth = 720;
 constexpr auto kStoryHeight = 1280;
 
 using Data::PhotoSize;
-
-[[nodiscard]] bool IsHostedInstantViewMedia(not_null<const Element*> parent) {
-	return parent->Get<InstantViewMediaRuntime>() != nullptr;
-}
-
-[[nodiscard]] double HostedInstantViewMediaPixelScale(
-		not_null<const Element*> parent) {
-	const auto runtime = parent->Get<InstantViewMediaRuntime>();
-	return runtime ? runtime->mediaPixelScale : 1.;
-}
-
-[[nodiscard]] QSize ScaledInstantViewMediaSize(QSize size, double scale) {
-	return (scale == 1.)
-		? size
-		: QSize(
-			std::max(qRound(size.width() * scale), 1),
-			std::max(qRound(size.height() * scale), 1));
-}
-
-[[nodiscard]] QSize HostedInstantViewForcedSize(
-		not_null<const Element*> parent,
-		not_null<const Media*> media) {
-	const auto runtime = parent->Get<InstantViewMediaRuntime>();
-	return (runtime && runtime->forcedFor == media)
-		? runtime->forcedSize
-		: QSize();
-}
-
-[[nodiscard]] QSize PhotoDesiredMediaSize(
-		QSize dimensions,
-		bool hostedInstantView) {
-	return hostedInstantView
-		? NonEmptySize(style::ConvertScale(dimensions))
-		: CountDesiredMediaSize(dimensions);
-}
 
 } // namespace
 
@@ -231,22 +201,14 @@ QSize Photo::countOptimalSize() {
 	if (_serviceWidth > 0) {
 		return { int(_serviceWidth), int(_serviceWidth) };
 	}
-	if (const auto forced = HostedInstantViewForcedSize(_parent, this)
-		; !forced.isEmpty()) {
-		return forced;
-	}
-	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
 	const auto dimensions = photoSize();
-	const auto scaled = PhotoDesiredMediaSize(dimensions, hostedInstantView);
-	const auto maxMediaWidth = hostedInstantView
-		? std::max(scaled.width(), st::maxMediaSize)
-		: st::maxMediaSize;
+	const auto scaled = CountDesiredMediaSize(dimensions);
 	const auto minWidth = std::clamp(
 		_parent->minWidthForMedia(),
 		(_parent->hasBubble()
 			? st::historyPhotoBubbleMinWidth
 			: st::minPhotoSize),
-		maxMediaWidth);
+		st::maxMediaSize);
 	const auto maxActualWidth = qMax(scaled.width(), minWidth);
 	auto maxWidth = qMax(maxActualWidth, scaled.height());
 	auto minHeight = qMax(scaled.height(), st::minPhotoSize);
@@ -268,14 +230,7 @@ QSize Photo::countCurrentSize(int newWidth) {
 	if (_serviceWidth) {
 		return { int(_serviceWidth), int(_serviceWidth) };
 	}
-	if (const auto forced = HostedInstantViewForcedSize(_parent, this)
-		; !forced.isEmpty()) {
-		return forced;
-	}
-	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
-	const auto thumbMaxWidth = hostedInstantView
-		? std::max(newWidth, 1)
-		: qMin(newWidth, st::maxMediaSize);
+	const auto thumbMaxWidth = qMin(newWidth, st::maxMediaSize);
 	const auto minWidth = std::clamp(
 		_parent->minWidthForMedia(),
 		qMin(thumbMaxWidth, _parent->hasBubble()
@@ -283,15 +238,14 @@ QSize Photo::countCurrentSize(int newWidth) {
 			: st::minPhotoSize),
 		thumbMaxWidth);
 	const auto dimensions = photoSize();
-	const auto desired = PhotoDesiredMediaSize(dimensions, hostedInstantView);
 	auto pix = _data->extendedMediaVideoDuration()
 		? CountMediaSize(
-			desired,
+			CountDesiredMediaSize(dimensions),
 			newWidth)
 		: CountPhotoMediaSize(
-			desired,
+			CountDesiredMediaSize(dimensions),
 			newWidth,
-			hostedInstantView ? newWidth : maxWidth());
+			maxWidth());
 	newWidth = qMax(pix.width(), minWidth);
 	auto newHeight = qMax(pix.height(), st::minPhotoSize);
 	if (_parent->hasBubble()) {
@@ -351,7 +305,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	const auto loaded = preview || _dataMedia->loaded();
 	const auto displayLoading = !preview && _data->displayLoading();
 
-	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
 	auto inWebPage = (_parent->media() != this);
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
 	auto bubble = _parent->hasBubble();
@@ -368,12 +321,10 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	if (_serviceWidth > 0) {
 		paintUserpicFrame(p, context, rthumb.topLeft());
 	} else {
-		const auto rounding = hostedInstantView
-			? std::optional<Ui::BubbleRounding>(Ui::BubbleRounding())
-			: inWebPage
+		const auto rounding = inWebPage
 			? std::optional<Ui::BubbleRounding>()
 			: adjustedBubbleRounding();
-		if (!bubble && !hostedInstantView) {
+		if (!bubble) {
 			Assert(rounding.has_value());
 			fillImageShadow(p, rthumb, *rounding, context);
 		}
@@ -385,11 +336,11 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		}
 		if (revealed > 0.) {
 			validateImageCache(rthumb.size(), rounding);
-			p.drawImage(rthumb, _imageCache);
+			p.drawImage(rthumb.topLeft(), _imageCache);
 		}
 		if (revealed < 1.) {
 			p.setOpacity(1. - revealed);
-			p.drawImage(rthumb, _spoiler->background);
+			p.drawImage(rthumb.topLeft(), _spoiler->background);
 			fillImageSpoiler(p, _spoiler.get(), rthumb, context);
 			p.setOpacity(1.);
 		}
@@ -416,7 +367,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			p.setBrush(over ? st->msgDateImgBgOver() : st->msgDateImgBg());
 		}
 	}
-	if (paintInCenter) {
+	if (paintInCenter && !AyuFeatures::MessageShot::isTakingShot()) {
 		const auto radialOpacity = (radial && loaded && !_data->uploading())
 			? _animation->radial.opacity() :
 			1.;
@@ -528,13 +479,18 @@ void Photo::validateUserpicImageCache(QSize size, bool forum) const {
 		args = args.blurred();
 	}
 	original = Images::Prepare(std::move(original), size * ratio, args);
-	if (forumValue) {
+	const auto shape = forumValue
+		? Ui::PeerUserpicShape::Forum
+		: Ui::PeerUserpicShape::Circle;
+	if (AyuUserpic::ShouldOverrideShape(shape)) {
+		original = Images::Round(
+			std::move(original),
+			ImageRoundRadius::AyuUserpic);
+	} else {
 		original = Images::Round(
 			std::move(original),
 			Images::CornersMask(std::min(size.width(), size.height())
 				* Ui::ForumUserpicRadiusMultiplier()));
-	} else {
-		original = Images::Circle(std::move(original));
 	}
 	_imageCache = std::move(original);
 	_imageCacheForum = forumValue;
@@ -546,17 +502,14 @@ void Photo::validateImageCache(
 		std::optional<Ui::BubbleRounding> rounding) const {
 	const auto large = _dataMedia->image(PhotoSize::Large);
 	const auto ratio = style::DevicePixelRatio();
-	const auto scaled = ScaledInstantViewMediaSize(
-		outer,
-		HostedInstantViewMediaPixelScale(_parent));
 	const auto blurredValue = large ? 0 : 1;
-	if (_imageCache.size() == (scaled * ratio)
+	if (_imageCache.size() == (outer * ratio)
 		&& _imageCacheRounding == rounding
 		&& _imageCacheBlurred == blurredValue) {
 		return;
 	}
 	_imageCache = Images::Round(
-		prepareImageCache(scaled),
+		prepareImageCache(outer),
 		MediaRoundingMask(rounding));
 	_imageCacheRounding = rounding;
 	_imageCacheBlurred = blurredValue;
@@ -568,15 +521,12 @@ void Photo::validateSpoilerImageCache(
 	Expects(_spoiler != nullptr);
 
 	const auto ratio = style::DevicePixelRatio();
-	const auto scaled = ScaledInstantViewMediaSize(
-		outer,
-		HostedInstantViewMediaPixelScale(_parent));
-	if (_spoiler->background.size() == (scaled * ratio)
+	if (_spoiler->background.size() == (outer * ratio)
 		&& _spoiler->backgroundRounding == rounding) {
 		return;
 	}
 	_spoiler->background = Images::Round(
-		prepareImageCacheWithLarge(scaled, nullptr),
+		prepareImageCacheWithLarge(outer, nullptr),
 		MediaRoundingMask(rounding));
 	_spoiler->backgroundRounding = rounding;
 }
@@ -628,7 +578,16 @@ void Photo::paintUserpicFrame(
 		const auto ratio = style::DevicePixelRatio();
 		auto request = ::Media::Streaming::FrameRequest();
 		request.outer = request.resize = size * ratio;
-		if (forum) {
+		const auto shape = forum
+			? Ui::PeerUserpicShape::Forum
+			: Ui::PeerUserpicShape::Circle;
+		if (AyuUserpic::ShouldOverrideShape(shape)) {
+			AyuUserpic::ApplyFrameRounding(
+				request,
+				_streamed->roundingCorners,
+				_streamed->roundingMask,
+				size);
+		} else if (forum) {
 			const auto radius = int(std::min(size.width(), size.height())
 				* Ui::ForumUserpicRadiusMultiplier());
 			if (_streamed->roundingCorners[0].width() != radius * ratio) {
@@ -822,11 +781,11 @@ void Photo::drawGrouped(
 	}
 	if (revealed > 0.) {
 		validateGroupedCache(geometry, rounding, cacheKey, cache);
-		p.drawPixmap(geometry, *cache);
+		p.drawPixmap(geometry.topLeft(), *cache);
 	}
 	if (revealed < 1.) {
 		p.setOpacity(1. - revealed);
-		p.drawImage(geometry, _spoiler->background);
+		p.drawImage(geometry.topLeft(), _spoiler->background);
 		fillImageSpoiler(p, _spoiler.get(), geometry, context);
 		p.setOpacity(1.);
 	}
@@ -847,7 +806,7 @@ void Photo::drawGrouped(
 		&& (radial
 			|| (!loaded && !_data->loading())
 			|| _data->waitingForAlbum());
-	if (paintInCenter) {
+	if (paintInCenter && !AyuFeatures::MessageShot::isTakingShot()) {
 		const auto radialOpacity = radial
 			? _animation->radial.opacity()
 			: 1.;
@@ -940,6 +899,14 @@ bool Photo::dataLoaded() const {
 }
 
 bool Photo::needInfoDisplay() const {
+	if (AyuFeatures::MessageShot::ignoreRender(AyuFeatures::MessageShot::RenderPart::Date)) {
+		return false;
+	}
+
+	if (AyuFeatures::MessageShot::isTakingShot()) {
+		return true;
+	}
+
 	if (_parent->data()->isFakeAboutView()) {
 		return false;
 	}
@@ -968,11 +935,8 @@ void Photo::validateGroupedCache(
 			|| _dataMedia->image(PhotoSize::Thumbnail))
 		? 1
 		: 0;
-	const auto scaled = ScaledInstantViewMediaSize(
-		geometry.size(),
-		HostedInstantViewMediaPixelScale(_parent));
-	const auto width = scaled.width();
-	const auto height = scaled.height();
+	const auto width = geometry.width();
+	const auto height = geometry.height();
 	const auto options = (loaded ? Option() : Option::Blur);
 	const auto key = (uint64(width) << 48)
 		| (uint64(height) << 32)
@@ -1001,12 +965,12 @@ void Photo::validateGroupedCache(
 		: Image::BlankMedia().get();
 
 	*cacheKey = key;
-	auto prepared = Images::Prepare(
+	auto scaled = Images::Prepare(
 		image->original(),
 		pixSize * ratio,
 		{ .options = options, .outer = { width, height } });
 	auto rounded = Images::Round(
-		std::move(prepared),
+		std::move(scaled),
 		MediaRoundingMask(rounding));
 	*cache = Ui::PixmapFromImage(std::move(rounded));
 }
@@ -1141,6 +1105,12 @@ bool Photo::videoAutoplayEnabled() const {
 void Photo::hideSpoilers() {
 	if (_spoiler) {
 		_spoiler->revealed = false;
+	}
+}
+
+void Photo::revealSpoilers() {
+	if (_spoiler) {
+		_spoiler->revealed = true;
 	}
 }
 

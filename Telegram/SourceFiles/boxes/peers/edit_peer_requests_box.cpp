@@ -37,7 +37,7 @@ namespace {
 
 constexpr auto kFirstPageCount = 16;
 constexpr auto kPerPage = 200;
-constexpr auto kServerSearchDelay = crl::time(1000);
+constexpr auto kServerSearchDelay = crl::time(150);
 constexpr auto kAcceptButton = 1;
 constexpr auto kRejectButton = 2;
 
@@ -105,13 +105,13 @@ QRect Row::elementGeometry(int element, int outerWidth) const {
 	switch (element) {
 	case kAcceptButton: {
 		const auto size = _delegate->rowAcceptButtonSize();
-		return QRect(st::communityRequestAcceptPosition, size);
+		return QRect(st::requestAcceptPosition, size);
 	} break;
 	case kRejectButton: {
 		const auto accept = _delegate->rowAcceptButtonSize();
 		const auto size = _delegate->rowRejectButtonSize();
 		return QRect(
-			(st::communityRequestAcceptPosition
+			(st::requestAcceptPosition
 				+ QPoint(accept.width() + st::requestButtonsSkip, 0)),
 			size);
 	} break;
@@ -145,7 +145,7 @@ void Row::elementAddRipple(
 			(element == kAcceptButton
 				? _delegate->rowAcceptButtonSize()
 				: _delegate->rowRejectButtonSize()),
-			st::requestsAcceptButton.height / 2);
+			st::buttonRadius);
 		ripple = std::make_unique<Ui::RippleAnimation>(
 			(element == kAcceptButton
 				? st::requestsAcceptButton.ripple
@@ -236,18 +236,10 @@ private:
 };
 
 RequestsBoxController::RowHelper::RowHelper(bool isGroup)
-: _acceptRect(
-	st::requestsAcceptButton.height / 2,
-	st::requestsAcceptButton.textBg)
-, _acceptRectOver(
-	st::requestsAcceptButton.height / 2,
-	st::requestsAcceptButton.textBgOver)
-, _rejectRect(
-	st::requestsAcceptButton.height / 2,
-	st::requestsRejectButton.textBg)
-, _rejectRectOver(
-	st::requestsAcceptButton.height / 2,
-	st::requestsRejectButton.textBgOver)
+: _acceptRect(st::buttonRadius, st::requestsAcceptButton.textBg)
+, _acceptRectOver(st::buttonRadius, st::requestsAcceptButton.textBgOver)
+, _rejectRect(st::buttonRadius, st::requestsRejectButton.textBg)
+, _rejectRectOver(st::buttonRadius, st::requestsRejectButton.textBgOver)
 , _acceptText(isGroup
 	? tr::lng_group_requests_add(tr::now)
 	: tr::lng_group_requests_add_channel(tr::now))
@@ -264,7 +256,7 @@ RequestsBoxController::RequestsBoxController(
 , _helper(std::make_unique<RowHelper>(!peer->isBroadcast()))
 , _peer(peer)
 , _api(&_peer->session().mtp()) {
-	setStyleOverrides(&st::communityRequestsBoxList);
+	setStyleOverrides(&st::requestsBoxList);
 	subscribeToMigration();
 }
 

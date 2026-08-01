@@ -11,7 +11,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "boxes/premium_preview_box.h"
 #include "calls/calls_instance.h"
-#include "data/components/ephemeral_messages.h"
 #include "data/components/sponsored_messages.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/notify/data_notify_settings.h"
@@ -24,7 +23,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum_topic.h"
 #include "data/data_message_reactions.h"
 #include "data/data_poll.h"
-#include "data/data_premium_limits.h"
 #include "data/data_session.h"
 #include "data/data_stories.h"
 #include "data/data_user.h"
@@ -54,7 +52,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/item_text_options.h"
 #include "lang/lang_keys.h"
 
-#include "styles/style_layers.h"
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/utils/telegram_helpers.h"
+
 
 namespace {
 
@@ -75,9 +76,7 @@ int ComputeSendingMessagesCount(
 		not_null<History*> history,
 		const SendingErrorRequest &request) {
 	auto result = 0;
-	if (request.richMessage) {
-		++result;
-	} else if (request.text && !request.text->empty()) {
+	if (request.text && !request.text->empty()) {
 		auto sending = TextWithEntities();
 		auto left = TextWithEntities{
 			request.text->text,
@@ -86,12 +85,9 @@ int ComputeSendingMessagesCount(
 		auto prepareFlags = Ui::ItemTextOptions(
 			history,
 			history->session().user()).flags;
-		const auto messageLengthLimit = Data::PremiumLimits(
-			&history->session()
-		).messageLengthCurrent();
 		TextUtilities::PrepareForSending(left, prepareFlags);
 
-		while (TextUtilities::CutPart(sending, left, messageLengthLimit)) {
+		while (TextUtilities::CutPart(sending, left, MaxMessageSize)) {
 			++result;
 		}
 		if (!result) {
@@ -113,9 +109,6 @@ Data::SendError GetErrorForSending(
 	const auto thread = topic
 		? not_null<Data::Thread*>(topic)
 		: peer->owner().history(peer);
-	const auto messageLengthLimit = Data::PremiumLimits(
-		&thread->owningHistory()->session()
-	).messageLengthCurrent();
 	if (request.story) {
 		if (const auto error = request.story->errorTextForForward(thread)) {
 			return error;
@@ -128,9 +121,8 @@ Data::SendError GetErrorForSending(
 			}
 		}
 	}
-	const auto hasText = request.richMessage
-		|| (request.text && !request.text->empty());
-	if (hasText && !request.ignoreRestrictions) {
+	const auto hasText = (request.text && !request.text->empty());
+	if (hasText) {
 		const auto error = Data::RestrictionError(
 			peer,
 			ChatRestriction::SendOther);
@@ -140,7 +132,7 @@ Data::SendError GetErrorForSending(
 			return tr::lng_forward_cant(tr::now);
 		}
 	}
-	if (peer->slowmodeApplied() && !request.ignoreRestrictions) {
+	if (peer->slowmodeApplied()) {
 		const auto count = request.messagesCount
 			? request.messagesCount
 			: ComputeSendingMessagesCount(thread->owningHistory(), request);
@@ -151,7 +143,7 @@ Data::SendError GetErrorForSending(
 				return tr::lng_slowmode_no_many(tr::now);
 			}
 		}
-		if (request.text && request.text->text.size() > messageLengthLimit) {
+		if (request.text && request.text->text.size() > MaxMessageSize) {
 			return tr::lng_slowmode_too_long(tr::now);
 		} else if ((hasText || request.story) && count > 1) {
 			return tr::lng_slowmode_no_many(tr::now);
@@ -174,7 +166,7 @@ Data::SendError GetErrorForSending(
 		}
 	}
 	if (const auto left = peer->slowmodeSecondsLeft()) {
-		if (!request.ignoreSlowmodeCountdown && !request.ignoreRestrictions) {
+		if (!request.ignoreSlowmodeCountdown) {
 			return tr::lng_slowmode_enabled(
 				tr::now,
 				lt_left,
@@ -621,6 +613,11 @@ QString NewMessagePostAuthor(const Api::SendAction &action) {
 bool ShouldSendSilent(
 		not_null<PeerData*> peer,
 		const Api::SendOptions &options) {
+	const auto &ghost = AyuSettings::ghost(&peer->session());
+	if (ghost.shouldSendWithoutSound()) {
+		return !options.silent;
+	}
+
 	return options.silent
 		|| (peer->isBroadcast()
 			&& peer->owner().notifySettings().silentPosts(peer))
@@ -651,63 +648,13 @@ bool LookupReplyIsTopicPost(HistoryItem *replyTo) {
 		&& (replyTo->topicRootId() != Data::ForumTopic::kGeneralId);
 }
 
-bool ShowEphemeralReplyTextOnlyError(
-		std::shared_ptr<ChatHelpers::Show> show,
-		not_null<Main::Session*> session,
-		FullMsgId replyToId) {
-	const auto item = session->data().message(replyToId);
-	if (!item || !item->isEphemeral()) {
-		return false;
-	}
-	show->showToast(tr::lng_ephemeral_reply_text_only(tr::now));
-	return true;
-}
-
-void StripEphemeralReply(
-		not_null<Main::Session*> session,
-		FullReplyTo &replyTo) {
-	const auto item = session->data().message(replyTo.messageId);
-	if (item && item->isEphemeral()) {
-		replyTo.messageId = FullMsgId();
-	}
-}
-
-void ConfirmDeleteSelectedEphemeral(
-		std::shared_ptr<ChatHelpers::Show> show,
-		std::vector<not_null<HistoryItem*>> items,
-		Fn<void()> confirmed) {
-	if (items.empty()) {
-		return;
-	}
-	const auto session = &items.front()->history()->session();
-	auto ids = std::vector<FullMsgId>();
-	ids.reserve(items.size());
-	for (const auto &item : items) {
-		ids.push_back(item->fullId());
-	}
-	const auto count = int(ids.size());
-	show->show(Ui::MakeConfirmBox({
-		.text = tr::lng_selected_delete_sure(tr::now, lt_count, count),
-		.confirmed = [=](Fn<void()> &&close) {
-			close();
-			const auto owner = &session->data();
-			for (const auto &id : ids) {
-				if (const auto item = owner->message(id)) {
-					session->ephemeralMessages().deleteMessage(item);
-				}
-			}
-			if (const auto onstack = confirmed) {
-				onstack();
-			}
-		},
-		.confirmText = tr::lng_box_delete(),
-		.confirmStyle = &st::attentionBoxButton,
-	}));
-}
-
 TextWithEntities DropDisallowedCustomEmoji(
 		not_null<PeerData*> to,
 		TextWithEntities text) {
+	if (true) { // AyuGram: allow all premium emojis (via tg://emoji?id=...)
+		return text;
+	}
+
 	if (to->session().premium() || to->isSelf()) {
 		return text;
 	}
@@ -914,7 +861,9 @@ MessageFlags FlagsFromMTP(
 			? Flag::IsOrWasScheduled
 			: Flag())
 		| ((flags & MTP::f_views) ? Flag::HasViews : Flag())
-		| ((flags & MTP::f_noforwards) ? Flag::NoForwards : Flag())
+		// AyuGram: removed
+		// | ((flags & MTP::f_noforwards) ? Flag::NoForwards : Flag())
+		| (flags & MTP::f_noforwards ? Flag::AyuNoForwards : Flag())
 		| ((flags & MTP::f_invert_media) ? Flag::InvertMedia : Flag())
 		| ((flags & MTP::f_video_processing_pending)
 			? Flag::EstimatedDate
@@ -926,9 +875,6 @@ MessageFlags FlagsFromMTP(
 			: Flag())
 		| ((flags & MTP::f_summary_from_language)
 			? Flag::CanBeSummarized
-			: Flag())
-		| ((flags & MTP::f_guestchat_via_from)
-			? Flag::GuestChatViaFrom
 			: Flag());
 }
 
@@ -968,15 +914,16 @@ MTPMessageReplyHeader NewMessageReplyHeader(const Api::SendAction &action) {
 		const auto replyToTop = LookupReplyToTop(action.history, replyTo);
 		const auto topicPost = replyTo.topicRootId
 			&& (replyTo.topicRootId != Data::ForumTopic::kGeneralId);
+		const auto quoteNormalized = reverseLocalPremiumEmoji(replyTo.quote, action.history, true);
 		auto quoteEntities = Api::EntitiesToMTP(
 			&action.history->session(),
-			replyTo.quote.entities,
+			quoteNormalized.entities,
 			Api::ConvertOption::SkipLocal);
 		return MTP_messageReplyHeader(
 			MTP_flags(Flag::f_reply_to_msg_id
 				| (replyToTop ? Flag::f_reply_to_top_id : Flag())
 				| (externalPeerId ? Flag::f_reply_to_peer_id : Flag())
-				| (replyTo.quote.empty()
+				| (quoteNormalized.empty()
 					? Flag()
 					: (Flag::f_quote
 						| Flag::f_quote_text
@@ -1258,6 +1205,14 @@ void CheckReactionNotificationSchedule(
 	if (from == Api::ReactionsNotifyFrom::None) {
 		return;
 	}
+	const auto peer = item->history()->peer;
+	const auto &settings = AyuSettings::getInstance();
+	if ((peer->isChannel() && !peer->isMegagroup() && !settings.showChannelReactions())
+		|| (peer->isMegagroup() && !settings.showGroupReactions())
+		|| (peer->isUser() && !settings.showPrivateChatReactions())) {
+		item->markEffectWatched();
+		return;
+	}
 	for (const auto &[emoji, reactions] : item->recentReactions()) {
 		for (const auto &reaction : reactions) {
 			if (!reaction.unread) {
@@ -1377,9 +1332,9 @@ void CheckPollVoteNotificationSchedule(
 }
 
 [[nodiscard]] TextWithEntities UnsupportedMessageText() {
-	const auto siteLink = u"https://desktop.telegram.org"_q;
+	const auto siteLink = u"https://t.me/AyuGramReleases"_q;
 	auto result = TextWithEntities{
-		tr::lng_message_unsupported(tr::now, lt_link, siteLink)
+		tr::lng_message_unsupported(tr::now, lt_link, siteLink).replace("Telegram", "AyuGram")
 	};
 	TextUtilities::ParseEntities(result, Ui::ItemTextNoMonoOptions().flags);
 	result.entities.push_front(

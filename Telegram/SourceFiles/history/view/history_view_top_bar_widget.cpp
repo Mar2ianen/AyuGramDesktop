@@ -68,8 +68,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 #include "styles/style_chat.h"
 #include "styles/style_info.h"
+#include "styles/style_menu_icons.h"
 
 #include <QtGui/QWindow>
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "boxes/peers/edit_participants_box.h"
+#include "data/data_chat_filters.h"
+#include "history/admin_log/history_admin_log_section.h"
+#include "styles/style_ayu_styles.h"
+#include "styles/style_ayu_icons.h"
+
 
 namespace HistoryView {
 namespace {
@@ -120,6 +130,7 @@ TopBarWidget::TopBarWidget(
 , _forward(this, tr::lng_selected_forward(), st::defaultActiveButton)
 , _sendNow(this, tr::lng_selected_send_now(), st::defaultActiveButton)
 , _delete(this, tr::lng_selected_delete(), st::defaultActiveButton)
+, _messageShot(this, tr::ayu_MessageShotTopBarText(), st::defaultActiveButton)
 , _back(this, st::historyTopBarBack)
 , _cancelChoose(this, st::topBarCloseChoose)
 , _call(this, st::topBarCall)
@@ -127,6 +138,8 @@ TopBarWidget::TopBarWidget(
 , _search(this, st::topBarSearch)
 , _infoToggle(this, st::topBarInfo)
 , _menuToggle(this, st::topBarMenuToggle)
+, _recentActions(this, st::topBarRecentActions)
+, _admins(this, st::topBarAdmins)
 , _titlePeerText(st::windowMinWidth / 3)
 , _onlineUpdater([=] { updateOnlineDisplay(); }) {
 	setAttribute(Qt::WA_OpaquePaintEvent);
@@ -135,6 +148,7 @@ TopBarWidget::TopBarWidget(
 	_forward->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
 	_sendNow->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
 	_delete->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
+	_messageShot->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
 
 	Lang::Updated(
 	) | rpl::on_next([=] {
@@ -147,6 +161,8 @@ TopBarWidget::TopBarWidget(
 	_sendNow->setWidthChangedCallback([=] { updateControlsGeometry(); });
 	_delete->setClickedCallback([=] { _deleteSelection.fire({}); });
 	_delete->setWidthChangedCallback([=] { updateControlsGeometry(); });
+	_messageShot->setClickedCallback([=] { _messageShotSelection.fire({}); });
+	_messageShot->setWidthChangedCallback([=] { updateControlsGeometry(); });
 	_clear->setClickedCallback([=] { _clearSelection.fire({}); });
 	_call->setClickedCallback([=] { call({}); });
 	_call->setAcceptBoth(true, true);
@@ -159,6 +175,26 @@ TopBarWidget::TopBarWidget(
 	_menuToggle->addClickHandler([=](auto) { showPeerMenu(); });
 	_menuToggle->setAcceptBoth(true, true);
 	_infoToggle->setClickedCallback([=] { toggleInfoSection(); });
+
+	_recentActions->setClickedCallback([=]
+	{
+		const auto channel = _activeChat.key.peer()->asChannel();
+		_controller->showSection(std::make_shared<AdminLog::SectionMemento>(channel));
+	});
+	_admins->setClickedCallback([=]
+	{
+		ParticipantsBoxController::Start(
+			controller,
+			_activeChat.key.peer(),
+			ParticipantsBoxController::Role::Admins
+		);
+	});
+
+	AyuSettings::getInstance().quickAdminShortcutsChanges(
+	) | rpl::on_next([=](bool) {
+		updateControlsVisibility();
+	}, lifetime());
+
 	_back->setAcceptBoth();
 	_back->addClickHandler([=](Qt::MouseButton) {
 		InvokeQueued(_back.data(), [=] { backClicked(); });
@@ -212,12 +248,7 @@ TopBarWidget::TopBarWidget(
 		| UpdateFlag::SupportInfo
 		| UpdateFlag::Rights
 		| UpdateFlag::EmojiStatus
-		| UpdateFlag::Name
 	) | rpl::on_next([=](const Data::PeerUpdate &update) {
-		if ((update.flags & UpdateFlag::Name)
-			&& (update.peer == titleNamePeer())) {
-			TopBarWidget::update();
-		}
 		if (update.flags & UpdateFlag::HasCalls) {
 			if (update.peer->isUser()
 				&& (update.peer->isSelf()
@@ -552,8 +583,19 @@ void TopBarWidget::paintTopBar(Painter &p) {
 		? _activeChat.key.owningHistory()->peer.get()
 		: nullptr;
 	const auto folder = _activeChat.key.folder();
+	const auto sublist = _activeChat.key.sublist();
 	const auto topic = _activeChat.key.topic();
-	const auto namePeer = titleNamePeer();
+	const auto history = _activeChat.key.history();
+	const auto broadcastForMonoforum = history
+		? history->peer->monoforumBroadcast()
+		: nullptr;
+	const auto namePeer = broadcastForMonoforum
+		? broadcastForMonoforum
+		: history
+		? history->peer.get()
+		: sublist
+		? sublist->sublistPeer().get()
+		: nullptr;
 	if (topic && _activeChat.section == Section::Replies) {
 		p.setPen(st::dialogsNameFg);
 		topic->chatListNameText().drawElided(
@@ -580,8 +622,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			&& (peer->sharedMediaInfo() || peer->isVerifyCodes())
 			&& _activeChat.section != Section::SavedSublist)
 		|| (_activeChat.section == Section::Scheduled)
-		|| (_activeChat.section == Section::Pinned)
-		|| communityChatsListBar()) {
+		|| (_activeChat.section == Section::Pinned)) {
 		auto text = (_activeChat.section == Section::Scheduled)
 			? ((peer && peer->isSelf())
 				? tr::lng_reminder_messages(tr::now)
@@ -597,22 +638,17 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			: peer->isVerifyCodes()
 			? tr::lng_verification_codes(tr::now)
 			: peer->name();
-		const auto opacity = folder ? _titleShownRatio : 1.;
-		if (opacity > 0.) {
-			const auto textWidth = st::historySavedFont->width(text);
-			if (namewidth < textWidth) {
-				text = st::historySavedFont->elided(text, namewidth);
-			}
-			p.setOpacity(opacity);
-			p.setPen(st::dialogsNameFg);
-			p.setFont(st::historySavedFont);
-			p.drawTextLeft(
-				nameleft,
-				(height() - st::historySavedFont->height) / 2,
-				width(),
-				text);
-			p.setOpacity(1.);
+		const auto textWidth = st::historySavedFont->width(text);
+		if (namewidth < textWidth) {
+			text = st::historySavedFont->elided(text, namewidth);
 		}
+		p.setPen(st::dialogsNameFg);
+		p.setFont(st::historySavedFont);
+		p.drawTextLeft(
+			nameleft,
+			(height() - st::historySavedFont->height) / 2,
+			width(),
+			text);
 	} else if (_activeChat.section == Section::Replies) {
 		p.setPen(st::dialogsNameFg);
 		p.setFont(st::semiboldFont);
@@ -646,8 +682,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			if (!_titleBadge.ready(info)) {
 				_titleBadge.set(
 					info,
-					namePeer->owner().customEmojiManager().factory(
-						Data::CustomEmojiSizeTag::Isolated),
+					namePeer->owner().customEmojiManager().factory(),
 					[=] { update(); });
 			}
 			const auto position = QPoint{ nameleft, nametop };
@@ -665,6 +700,8 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			.nameWidth = _title.maxWidth(),
 			.outerWidth = width(),
 			.verified = &st::dialogsVerifiedIcon,
+			.exteraOfficial = &st::dialogsExteraOfficialIcon.icon,
+			.exteraSupporter = &st::dialogsExteraSupporterIcon.icon,
 			.premium = &st::dialogsPremiumIcon.icon,
 			.scam = &st::attentionButtonFg,
 			.direct = &st::windowSubTextFg,
@@ -697,21 +734,6 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			paintStatus(p, statusleft, statustop, statuswidth, width());
 		}
 	}
-}
-
-PeerData *TopBarWidget::titleNamePeer() const {
-	const auto history = _activeChat.key.history();
-	const auto broadcastForMonoforum = history
-		? history->peer->monoforumBroadcast()
-		: nullptr;
-	const auto sublist = _activeChat.key.sublist();
-	return broadcastForMonoforum
-		? broadcastForMonoforum
-		: history
-		? history->peer.get()
-		: sublist
-		? sublist->sublistPeer().get()
-		: nullptr;
 }
 
 bool TopBarWidget::paintSendAction(
@@ -844,16 +866,18 @@ void TopBarWidget::infoClicked() {
 
 void TopBarWidget::backClicked() {
 	if (_activeChat.key.folder()) {
-		_controller->closeFolder();
+		const auto &settings = AyuSettings::getInstance();
+		if (settings.hideAllChatsFolder()) {
+			const auto filters = &_controller->session().data().chatsFilters();
+			const auto lookupId = filters->lookupId(_controller->session().premium() ? 0 : 1);
+			_controller->setActiveChatsFilter(lookupId);
+		} else {
+			_controller->closeFolder();
+		}
 	} else if (_activeChat.section == Section::ChatsList
 		&& _activeChat.key.history()
 		&& _activeChat.key.history()->isForum()) {
 		_controller->closeForum();
-	} else if (_activeChat.section == Section::ChatsList
-		&& _activeChat.key.history()
-		&& _activeChat.key.history()->peer->asChannel()
-		&& _activeChat.key.history()->peer->asChannel()->isCommunity()) {
-		_controller->closeCommunity();
 	} else {
 		_controller->showBackFromStack();
 	}
@@ -943,6 +967,7 @@ void TopBarWidget::setActiveChat(
 	updateUnreadBadge();
 	refreshInfoButton();
 	if (_menu) {
+		_menuToggle->setForceRippled(false);
 		_menu = nullptr;
 	}
 	updateOnlineDisplay();
@@ -993,17 +1018,6 @@ void TopBarWidget::setCustomTitle(const QString &title) {
 	}
 }
 
-void TopBarWidget::setTitleShownRatio(float64 shown) {
-	if (_titleShownRatio != shown) {
-		_titleShownRatio = shown;
-		update();
-	}
-}
-
-int TopBarWidget::titleLeft() const {
-	return _leftTaken;
-}
-
 bool TopBarWidget::rootChatsListBar() const {
 	if (_activeChat.section != Section::ChatsList) {
 		return false;
@@ -1011,21 +1025,9 @@ bool TopBarWidget::rootChatsListBar() const {
 	const auto id = _controller->windowId();
 	const auto separateFolder = id.folder();
 	const auto separateForum = id.forum();
-	const auto separateCommunity = id.community();
 	const auto active = _activeChat.key;
 	return (separateForum && separateForum->history() == active.history())
-		|| (separateFolder && separateFolder == active.folder())
-		|| (separateCommunity
-			&& separateCommunity->channel() == active.peer());
-}
-
-bool TopBarWidget::communityChatsListBar() const {
-	if (_activeChat.section != Section::ChatsList) {
-		return false;
-	}
-	const auto history = _activeChat.key.history();
-	const auto channel = history ? history->peer->asChannel() : nullptr;
-	return channel && channel->isCommunity();
+		|| (separateFolder && separateFolder == active.folder());
 }
 
 void TopBarWidget::refreshInfoButton() {
@@ -1107,6 +1109,7 @@ void TopBarWidget::updateControlsGeometry() {
 	auto buttonsWidth = (_forward->isHidden() ? 0 : _forward->contentWidth())
 		+ (_sendNow->isHidden() ? 0 : _sendNow->contentWidth())
 		+ (_delete->isHidden() ? 0 : _delete->contentWidth())
+		+ (_messageShot->isHidden() ? 0 : _messageShot->contentWidth())
 		+ _clear->width();
 	buttonsWidth += buttonsLeft + st::topBarActionSkip * 3;
 
@@ -1115,6 +1118,7 @@ void TopBarWidget::updateControlsGeometry() {
 	_forward->setFullWidth(buttonFullWidth);
 	_sendNow->setFullWidth(buttonFullWidth);
 	_delete->setFullWidth(buttonFullWidth);
+	_messageShot->setFullWidth(buttonFullWidth);
 
 	selectedButtonsTop += (height() - _forward->height()) / 2;
 
@@ -1129,6 +1133,11 @@ void TopBarWidget::updateControlsGeometry() {
 	}
 
 	_delete->moveToLeft(buttonsLeft, selectedButtonsTop);
+	if (!_delete->isHidden()) {
+		buttonsLeft += _delete->width() + st::topBarActionSkip;
+	}
+
+	_messageShot->moveToLeft(buttonsLeft, selectedButtonsTop);
 	{
 		const auto large = st::topBarActionButtonLargeRadius;
 		const auto &buttonSt = st::defaultActiveButton;
@@ -1139,6 +1148,7 @@ void TopBarWidget::updateControlsGeometry() {
 			_forward.data(),
 			_sendNow.data(),
 			_delete.data(),
+			_messageShot.data(),
 		};
 		auto first = (Ui::RoundButton*)(nullptr);
 		auto last = (Ui::RoundButton*)(nullptr);
@@ -1206,18 +1216,18 @@ void TopBarWidget::updateControlsGeometry() {
 			fieldWidth,
 			_searchField->height());
 
-		const auto fieldY = _searchField->y();
-		const auto cancelLeft = fieldLeft
-			+ fieldWidth
-			- _searchCancel->width();
-		_searchCancel->moveToLeft(cancelLeft, fieldY);
+		auto right = fieldLeft + fieldWidth;
+		_searchCancel->moveToLeft(
+			right - _searchCancel->width(),
+			_searchField->y());
+		right -= st::dialogsCalendar.width;
 		if (_jumpToDate) {
-			_jumpToDate->moveToLeft(
-				cancelLeft - st::dialogsCalendarTopBar.width,
-				fieldY);
+			_jumpToDate->moveToLeft(right, _searchField->y());
 		}
-		updateChooseFromUserGeometry();
-		updateSearchJumpToDateVisibility();
+		right -= st::dialogsSearchFrom.width;
+		if (_chooseFromUser) {
+			_chooseFromUser->moveToLeft(right, _searchField->y());
+		}
 	}
 
 	_rightTaken = 0;
@@ -1237,6 +1247,16 @@ void TopBarWidget::updateControlsGeometry() {
 		_groupCall->moveToRight(_rightTaken, otherButtonsTop);
 		_rightTaken += _call->width();
 	}
+
+	_recentActions->moveToRight(_rightTaken, otherButtonsTop);
+	if (!_recentActions->isHidden()) {
+		_rightTaken += _recentActions->width();
+	}
+	_admins->moveToRight(_rightTaken, otherButtonsTop);
+	if (!_admins->isHidden()) {
+		_rightTaken += _admins->width();
+	}
+
 	_search->moveToRight(_rightTaken, otherButtonsTop);
 	if (!_search->isHidden()) {
 		_rightTaken += _search->width() + st::topBarCallSkip;
@@ -1266,9 +1286,13 @@ void TopBarWidget::updateControlsVisibility() {
 		hideChildren();
 		return;
 	}
+
+	const auto &settings = AyuSettings::getInstance();
+
 	const auto visible = showSelectedState() || _selectedShown.animating();
 	_clear->setVisible(visible);
 	_delete->setVisible(_canDelete && visible);
+	_messageShot->setVisible(settings.showMessageShot() && visible);
 	_forward->setVisible(_canForward && visible);
 	_sendNow->setVisible(_canSendNow && visible);
 
@@ -1312,22 +1336,21 @@ void TopBarWidget::updateControlsVisibility() {
 			Ui::Menu::MenuCallback(callback));
 		return !empty;
 	}();
-	const auto hasMenu = (section == Section::History)
-		? !_activeChat.key.folder()
-		: (section == Section::Scheduled)
-		? (hasPollsMenu || hasTodoListsMenu)
-		: (section == Section::Replies)
-		? (hasPollsMenu || hasTodoListsMenu || hasTopicMenu)
-		: (section == Section::ChatsList)
-		? (_activeChat.key.folder()
-			|| (_activeChat.key.peer() && _activeChat.key.peer()->isForum())
-			|| communityChatsListBar())
-		: (section == Section::SavedSublist)
-		? (_activeChat.key.peer()
-			&& _activeChat.key.peer()->isChannel()
-			&& _activeChat.key.peer()->owner().commonStarsPerMessage(
-				_activeChat.key.peer()->asChannel()))
-		: false;
+	const auto hasMenu = !_activeChat.key.folder()
+		&& (section == Section::History
+			? true
+			: (section == Section::Scheduled)
+			? (hasPollsMenu || hasTodoListsMenu)
+			: (section == Section::Replies)
+			? (hasPollsMenu || hasTodoListsMenu || hasTopicMenu)
+			: (section == Section::ChatsList)
+			? (_activeChat.key.peer() && _activeChat.key.peer()->isForum())
+			: (section == Section::SavedSublist)
+			? (_activeChat.key.peer()
+				&& _activeChat.key.peer()->isChannel()
+				&& _activeChat.key.peer()->owner().commonStarsPerMessage(
+					_activeChat.key.peer()->asChannel()))
+			: false);
 	const auto hasInfo = !_activeChat.key.folder()
 		&& (section == Section::History
 			? true
@@ -1339,8 +1362,17 @@ void TopBarWidget::updateControlsVisibility() {
 			: false);
 	updateSearchVisibility();
 	if (_searchMode) {
-		_searchCancel->show(anim::type::normal);
-		updateSearchJumpToDateVisibility();
+		const auto hasSearchQuery = _searchField
+			&& !_searchField->getLastText().isEmpty();
+		if (!_jumpToDate || hasSearchQuery) {
+			_searchCancel->show(anim::type::normal);
+			if (_jumpToDate) {
+				_jumpToDate->hide(anim::type::normal);
+			}
+		} else {
+			_searchCancel->hide(anim::type::normal);
+			_jumpToDate->show(anim::type::normal);
+		}
 	}
 	_menuToggle->setVisible(hasMenu
 		&& !_chooseForReportReason
@@ -1349,6 +1381,47 @@ void TopBarWidget::updateControlsVisibility() {
 		&& !isOneColumn
 		&& _controller->canShowThirdSection()
 		&& !_chooseForReportReason);
+
+	const auto showRecentActions = [&]
+	{
+		const auto &settings = AyuSettings::getInstance();
+		if (!settings.quickAdminShortcuts()) {
+			return false;
+		}
+		if (_activeChat.section == Section::ChatsList) {
+			return false;
+		}
+		if (const auto peer = _activeChat.key.peer()) {
+			if (peer->isMegagroup() || peer->isChannel()) {
+				const auto channel = peer->asChannel();
+				return channel->hasAdminRights() || channel->amCreator();
+			}
+		}
+		return false;
+	}();
+	_recentActions->setVisible(showRecentActions);
+	const auto showAdmins = [&]
+	{
+		const auto &settings = AyuSettings::getInstance();
+		if (!settings.quickAdminShortcuts()) {
+			return false;
+		}
+		if (_activeChat.section == Section::ChatsList) {
+			return false;
+		}
+		if (const auto peer = _activeChat.key.peer()) {
+			if (peer->isMegagroup()) {
+				return true;
+			}
+			if (peer->isChannel()) {
+				const auto channel = peer->asChannel();
+				return channel->hasAdminRights() || channel->amCreator();
+			}
+		}
+		return false;
+	}();
+	_admins->setVisible(showAdmins);
+
 	const auto callsEnabled = [&] {
 		if (const auto peer = _activeChat.key.peer()) {
 			if (const auto user = peer->asUser()) {
@@ -1417,15 +1490,19 @@ void TopBarWidget::updateMembersShowArea() {
 }
 
 bool TopBarWidget::showSelectedState() const {
+	const auto &settings = AyuSettings::getInstance();
+
 	return (_selectedCount > 0)
-		&& (_canDelete || _canForward || _canSendNow);
+		&& (_canDelete || _canForward || _canSendNow || settings.showMessageShot());
 }
 
 void TopBarWidget::showSelected(SelectedState state) {
+	const auto &settings = AyuSettings::getInstance();
+
 	auto canDelete = (state.count > 0 && state.count == state.canDeleteCount);
 	auto canForward = (state.count > 0 && state.count == state.canForwardCount);
 	auto canSendNow = (state.count > 0 && state.count == state.canSendNowCount);
-	auto count = (!canDelete && !canForward && !canSendNow) ? 0 : state.count;
+	auto count = (!canDelete && !canForward && !canSendNow && !settings.showMessageShot()) ? 0 : state.count;
 	if (_selectedCount == count
 		&& _canDelete == canDelete
 		&& _canForward == canForward
@@ -1452,10 +1529,12 @@ void TopBarWidget::showSelected(SelectedState state) {
 		_forward->setNumbersText(_selectedCount);
 		_sendNow->setNumbersText(_selectedCount);
 		_delete->setNumbersText(_selectedCount);
+		_messageShot->setNumbersText(_selectedCount);
 		if (!wasSelectedState) {
 			_forward->finishNumbersAnimation();
 			_sendNow->finishNumbersAnimation();
 			_delete->finishNumbersAnimation();
+			_messageShot->finishNumbersAnimation();
 		}
 	}
 	if (visibilityChanged
@@ -1499,7 +1578,7 @@ bool TopBarWidget::toggleSearch(bool shown, anim::type animated) {
 			const auto was = _searchQuery.current();
 			const auto now = _searchField->getLastText();
 			if (_jumpToDate && was.isEmpty() != now.isEmpty()) {
-				updateSearchJumpToDateVisibility();
+				updateControlsVisibility();
 			}
 			if (_chooseFromUser) {
 				auto switchToChooseFrom = SwitchToChooseFromQuery();
@@ -1514,7 +1593,6 @@ bool TopBarWidget::toggleSearch(bool shown, anim::type animated) {
 	} else {
 		Assert(_searchField != nullptr);
 	}
-	_searchModeChanges.fire_copy(shown);
 	_searchQuery = shown ? _searchField->getLastText() : QString();
 	if (animated == anim::type::normal) {
 		_searchShown.start(
@@ -1541,11 +1619,10 @@ void TopBarWidget::searchEnableJumpToDate(bool enable) {
 	} else if (!_jumpToDate) {
 		_jumpToDate.create(
 			this,
-			object_ptr<Ui::IconButton>(this, st::dialogsCalendarTopBar));
-		_jumpToDate->toggle(false, anim::type::instant);
-		_jumpToDate->setUpdatedCallback([=](float64) {
-			updateChooseFromUserGeometry();
-		});
+			object_ptr<Ui::IconButton>(this, st::dialogsCalendar));
+		_jumpToDate->toggle(
+			_searchField->getLastText().isEmpty(),
+			anim::type::instant);
 		_jumpToDate->entity()->clicks(
 		) | rpl::to_empty | rpl::start_to_stream(
 			_jumpToDateRequests,
@@ -1553,51 +1630,6 @@ void TopBarWidget::searchEnableJumpToDate(bool enable) {
 	}
 	updateControlsVisibility();
 	updateControlsGeometry();
-}
-
-bool TopBarWidget::searchJumpToDateFits() const {
-	if (!_searchField) {
-		return false;
-	}
-	const auto &fieldSt = st::dialogsFilter;
-	const auto placeholderWidth = fieldSt.textMargins.left()
-		+ fieldSt.placeholderMargins.left()
-		+ fieldSt.placeholderFont->width(tr::lng_dlg_filter(tr::now))
-		+ fieldSt.placeholderMargins.right();
-	const auto required = placeholderWidth
-		+ st::dialogsFilterPadding.x()
-		+ st::dialogsSearchFromTopBar.width
-		+ st::dialogsCalendarTopBar.width
-		+ st::dialogsCancelSearch.width;
-	return (_searchField->width() >= required);
-}
-
-void TopBarWidget::updateChooseFromUserGeometry() {
-	if (!_searchField || !_searchCancel || !_chooseFromUser) {
-		return;
-	}
-	const auto fieldRight = st::dialogsFilterSkip
-		+ st::dialogsFilterPadding.x();
-	const auto cancelLeft = width() - fieldRight - _searchCancel->width();
-	const auto reserved = _jumpToDate
-		? anim::interpolate(
-			0,
-			st::dialogsCalendarTopBar.width,
-			_jumpToDate->shownProgress())
-		: 0;
-	_chooseFromUser->moveToLeft(
-		cancelLeft - reserved - st::dialogsSearchFromTopBar.width,
-		_searchField->y());
-}
-
-void TopBarWidget::updateSearchJumpToDateVisibility() {
-	if (!_searchMode || !_jumpToDate || !_searchField) {
-		return;
-	}
-	const auto empty = _searchField->getLastText().isEmpty();
-	_jumpToDate->toggle(
-		empty && searchJumpToDateFits(),
-		anim::type::normal);
 }
 
 void TopBarWidget::searchEnableChooseFromUser(bool enable, bool visible) {
@@ -1608,7 +1640,7 @@ void TopBarWidget::searchEnableChooseFromUser(bool enable, bool visible) {
 	} else if (!_chooseFromUser) {
 		_chooseFromUser.create(
 			this,
-			object_ptr<Ui::IconButton>(this, st::dialogsSearchFromTopBar));
+			object_ptr<Ui::IconButton>(this, st::dialogsSearchFrom));
 		_chooseFromUser->toggle(visible, anim::type::instant);
 		_chooseFromUser->entity()->clicks(
 		) | rpl::to_empty | rpl::start_to_stream(
@@ -1636,10 +1668,6 @@ bool TopBarWidget::searchSetFocus() {
 
 bool TopBarWidget::searchMode() const {
 	return _searchMode;
-}
-
-rpl::producer<bool> TopBarWidget::searchModeChanges() const {
-	return _searchModeChanges.events();
 }
 
 bool TopBarWidget::searchHasFocus() const {

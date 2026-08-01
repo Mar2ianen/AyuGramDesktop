@@ -11,7 +11,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include "base/platform/base_platform_info.h"
 #include "base/platform/linux/base_linux_dbus_utilities.h"
-#include "base/platform/linux/base_linux_xcb_utilities.h"
 #include "base/platform/linux/base_linux_xdp_utilities.h"
 #include "base/platform/linux/base_linux_app_launch_context.h"
 #include "lang/lang_keys.h"
@@ -19,10 +18,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/sandbox.h"
 #include "core/application.h"
 #include "core/update_checker.h"
-#include "core/version.h"
 #include "data/data_location.h"
 #include "window/window_controller.h"
 #include "webview/platform/linux/webview_linux_webkitgtk.h"
+
+#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
+#include "base/platform/linux/base_linux_xcb_utilities.h"
+#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QSystemTrayIcon>
@@ -232,7 +234,7 @@ bool GenerateDesktopFile(
 	DEBUG_LOG(("App Info: placing .desktop file to %1").arg(targetPath));
 	if (!QDir(targetPath).exists()) QDir().mkpath(targetPath);
 
-	const auto sourceFile = u":/misc/org.telegram.desktop.desktop"_q;
+	const auto sourceFile = u":/misc/com.ayugram.desktop.desktop"_q;
 	const auto targetFile = targetPath
 		+ QGuiApplication::desktopFileName()
 		+ u".desktop"_q;
@@ -371,7 +373,7 @@ bool GenerateDesktopFile(
 		hashMd5Hex(d.constData(), d.size(), md5Hash);
 
 		if (!Core::Launcher::Instance().customWorkingDir()) {
-			QFile::remove(u"%1org.telegram.desktop._%2.desktop"_q.arg(
+			QFile::remove(u"%1ayugram.desktop._%2.desktop"_q.arg(
 				targetPath,
 				md5Hash));
 
@@ -380,7 +382,7 @@ bool GenerateDesktopFile(
 			hashMd5Hex(exePath.constData(), exePath.size(), md5Hash);
 		}
 
-		QFile::remove(u"%1org.telegram.desktop.%2.desktop"_q.arg(
+		QFile::remove(u"%1ayugram.desktop.%2.desktop"_q.arg(
 			targetPath,
 			md5Hash));
 	}
@@ -468,10 +470,7 @@ void InstallLauncher() {
 		"DESKTOPINTEGRATION");
 
 	// don't update desktop file for alpha version or if updater is disabled
-	if (cAlphaVersion()
-			|| Core::UpdaterDisabled()
-			|| KSandbox::isInside()
-			|| DisabledByEnv) {
+	if (cAlphaVersion() || Core::UpdaterDisabled() || DisabledByEnv) {
 		return;
 	}
 
@@ -659,11 +658,13 @@ bool TrayIconSupported() {
 }
 
 bool SkipTaskbarSupported() {
+#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
 	if (IsX11()) {
 		return base::Platform::XCB::IsSupportedByWM(
 			base::Platform::XCB::Connection(),
 			"_NET_WM_STATE_SKIP_TASKBAR");
 	}
+#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 
 	return false;
 }
@@ -737,11 +738,11 @@ void start() {
 		}
 
 		if (!Core::UpdaterDisabled()) {
-			return u"org.telegram.desktop._%1"_q.arg(
+			return u"com.ayugram.desktop._%1"_q.arg(
 				Core::Launcher::Instance().instanceHash().constData());
 		}
 
-		return u"org.telegram.desktop"_q;
+		return u"com.ayugram.desktop"_q;
 	}());
 
 	LOG(("App ID: %1").arg(QGuiApplication::desktopFileName()));

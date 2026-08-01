@@ -37,6 +37,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QWindow>
 #include <QtGui/QScreen>
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/ayu_state.h"
+#include "data/data_story.h"
+
+
 namespace Window {
 namespace {
 
@@ -145,16 +151,10 @@ void Controller::showAccount(
 		MsgId singlePeerShowAtMsgId) {
 	Expects(isPrimary() || _id.account == account);
 
-	const auto prevAccount = _id.account;
 	const auto prevSession = maybeSession();
 	const auto prevSessionUniqueId = prevSession
 		? prevSession->uniqueId()
 		: 0;
-	const auto accountBeforeIntro = (prevAccount
-		&& prevAccount != account
-		&& prevAccount->sessionExists())
-		? prevAccount
-		: nullptr;
 	_accountLifetime.destroy();
 	_id.account = account;
 	Core::App().checkWindowId(this);
@@ -223,7 +223,7 @@ void Controller::showAccount(
 			session->updates().updateOnline(crl::now());
 		} else {
 			sideBarChanged();
-			setupIntro(accountBeforeIntro, std::move(oldContentCache));
+			setupIntro(std::move(oldContentCache));
 			_widget.updateGlobalMenu();
 		}
 
@@ -400,13 +400,8 @@ void Controller::clearSetupEmailLock() {
 	_widget.clearSetupEmailLock();
 }
 
-void Controller::setupIntro(
-		Main::Account *accountBeforeIntro,
-		QPixmap oldContentCache) {
-	const auto point = Core::App().domain().maybeLastOrSomeAuthedAccount()
-		? Intro::EnterPoint::Qr
-		: Intro::EnterPoint::Start;
-	_widget.setupIntro(point, accountBeforeIntro, std::move(oldContentCache));
+void Controller::setupIntro(QPixmap oldContentCache) {
+	_widget.setupIntro(Intro::EnterPoint::Qr, std::move(oldContentCache));
 }
 
 void Controller::setupMain(
@@ -471,16 +466,8 @@ void Controller::hideSettingsAndLayer(anim::type animated) {
 	_widget.ui_hideSettingsAndLayer(animated);
 }
 
-bool Controller::closeLayerByBackButton() {
-	return _widget.closeLayerByBackButton();
-}
-
 bool Controller::isLayerShown() const {
 	return _widget.ui_isLayerShown();
-}
-
-rpl::producer<bool> Controller::boxShownValue() const {
-	return _widget.ui_boxShownValue();
 }
 
 void Controller::sideBarChanged() {
@@ -586,6 +573,38 @@ Window::Adaptive &Controller::adaptive() const {
 }
 
 void Controller::openInMediaView(Media::View::OpenRequest &&request) {
+	if (request.story()) {
+		const auto story = not_null{ request.story() };
+		auto &ghost = AyuSettings::ghost(&story->session());
+		const auto suggestGhostMode = ghost.suggestGhostModeBeforeViewingStory()
+			&& ghost.sendReadStories()
+			&& !ghost.sendReadStoriesLocked()
+			&& !ghost.isGhostModeActive();
+		if (suggestGhostMode) {
+			const auto controller = request.controller();
+			const auto context = request.storiesContext();
+			show(Ui::MakeConfirmBox({
+				.text = tr::ayu_SuggestGhostModeStoryText(tr::now, tr::rich),
+				.confirmed = [=](Fn<void()> close) {
+					close();
+					AyuSettings::ghost(&story->session()).setGhostModeEnabled(true);
+					AyuState::setDisableGhostModeOnStoryClose(&story->session());
+					_openInMediaViewRequests.fire(
+						Media::View::OpenRequest(controller, story, context));
+				},
+				.cancelled = [=](Fn<void()> close) {
+					close();
+					_openInMediaViewRequests.fire(
+						Media::View::OpenRequest(controller, story, context));
+				},
+				.confirmText = tr::ayu_SuggestGhostModeStoryActionTextYes(),
+				.cancelText = tr::ayu_SuggestGhostModeStoryActionTextNo(),
+				.title = tr::ayu_SuggestGhostModeTitle(),
+				.strictCancel = true,
+			}));
+			return;
+		}
+	}
 	_openInMediaViewRequests.fire(std::move(request));
 }
 

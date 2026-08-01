@@ -12,7 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer_rpl.h"
 #include "settings/settings_builder.h"
 #include "settings/sections/settings_advanced.h"
-#include "settings/sections/settings_local_storage.h"
 #include "settings/sections/settings_main.h"
 #include "settings/sections/settings_privacy_security.h"
 #include "settings/settings_experimental.h"
@@ -27,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/background_box.h"
 #include "boxes/background_preview_box.h"
 #include "boxes/download_path_box.h"
+#include "boxes/local_storage_box.h"
 #include "dialogs/ui/dialogs_quick_action_context.h"
 #include "dialogs/dialogs_quick_action.h"
 #include "ui/boxes/choose_font_box.h"
@@ -89,6 +89,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 
 #include <QAction>
+
+// AyuGram includes
+#include "ayu/features/message_shot/message_shot.h"
+#include "window/themes/window_theme_preview.h"
+
 
 namespace Settings {
 namespace {
@@ -282,11 +287,15 @@ void ColorsPalette::show(Type type) {
 	}
 	list.insert(list.begin(), scheme->accentColor);
 	const auto &settings = Core::App().settings();
-	const auto color = settings.themesAccentColors().get(type);
-	const auto current = (settings.systemAccentColorEnabled()
-		? Window::Theme::SystemAccentColor()
-		: std::optional<QColor>()).value_or(
-			color.value_or(scheme->accentColor));
+	const auto messageShotSelected = AyuFeatures::MessageShot::isChoosingTheme()
+		? AyuFeatures::MessageShot::getSelectedColorFromDefault()
+		: std::optional<QColor>();
+	const auto color = messageShotSelected.has_value()
+		? messageShotSelected
+		: (settings.systemAccentColorEnabled()
+			? Window::Theme::SystemAccentColor()
+			: settings.themesAccentColors().get(type));
+	const auto current = color.value_or(scheme->accentColor);
 	const auto i = ranges::find(list, current);
 	if (i == end(list)) {
 		list.back() = current;
@@ -1802,19 +1811,6 @@ void SetupMessages(
 		} });
 	}
 
-	const auto pullToNext = inner->add(
-		object_ptr<Ui::Checkbox>(
-			inner,
-			tr::lng_settings_pull_to_next_channel(tr::now),
-			Core::App().settings().pullToNextChannel(),
-			st::settingsCheckbox),
-		st::settingsCheckboxPadding);
-	pullToNext->checkedChanges(
-	) | rpl::on_next([=](bool checked) {
-		Core::App().settings().setPullToNextChannel(checked);
-		Core::App().saveSettingsDelayed();
-	}, inner->lifetime());
-
 	Ui::AddSkip(inner);
 }
 
@@ -1880,9 +1876,7 @@ void SetupLocalStorage(
 		tr::lng_settings_manage_local_storage(),
 		st::settingsButton,
 		{ &st::menuIconStorage }
-	)->addClickHandler([=] {
-		controller->showSettings(LocalStorageId());
-	});
+	)->addClickHandler([=] { LocalStorageBox::Show(controller); });
 }
 
 void SetupDataStorage(
@@ -2370,7 +2364,38 @@ void SetupDefaultThemes(
 		st::settingsCheckboxPadding);
 	systemAccentWrap->setDuration(0);
 
+	const auto updateMessageShotPalette = [=](const QString &path)
+	{
+		if (path.isEmpty()) { // for Default theme (otherwise doesn't dispaly name properly)
+			style::palette embeddedPalette;
+			const auto color = AyuFeatures::MessageShot::getSelectedColorFromDefault();
+			Window::Theme::PreparePaletteCallback(false, color)(embeddedPalette);
+			AyuFeatures::MessageShot::setPalette(embeddedPalette);
+			return;
+		}
+		if (const auto color = AyuFeatures::MessageShot::getSelectedColorFromDefault()) {
+			const auto type = AyuFeatures::MessageShot::getSelectedFromDefault();
+			const auto scheme = ranges::find(kSchemesList, type, &Scheme::type);
+			if (scheme != end(kSchemesList)) {
+				const auto colorizer = ColorizerFrom(*scheme, *color);
+				auto instance = Window::Theme::Instance();
+				if (Window::Theme::LoadFromFile(path, &instance, nullptr, nullptr, colorizer)) {
+					AyuFeatures::MessageShot::setPalette(instance.palette);
+					return;
+				}
+			}
+		}
+		const Data::CloudTheme theme;
+		if (const auto preview = PreviewFromFile(QByteArray(), path, theme)) {
+			AyuFeatures::MessageShot::setPalette(preview->instance.palette);
+		}
+	};
+
 	const auto chosen = [] {
+		if (AyuFeatures::MessageShot::isChoosingTheme()) {
+			return AyuFeatures::MessageShot::getSelectedFromDefault();
+		}
+
 		const auto &object = Background()->themeObject();
 		if (object.cloud.id) {
 			return Type(-1);
@@ -2408,6 +2433,12 @@ void SetupDefaultThemes(
 	const auto schemeClicked = [=](
 			const Scheme &scheme,
 			Qt::KeyboardModifiers modifiers) {
+		if (AyuFeatures::MessageShot::isChoosingTheme()) {
+			AyuFeatures::MessageShot::setDefaultSelected(scheme.type);
+			updateMessageShotPalette(scheme.path);
+			return;
+		}
+
 		apply(scheme);
 	};
 
@@ -2454,6 +2485,16 @@ void SetupDefaultThemes(
 			? Window::Theme::SystemAccentColor()
 			: settings.themesAccentColors().get(type);
 		if (i != end(checks)) {
+			if (AyuFeatures::MessageShot::isChoosingTheme()) {
+				if (const auto color = AyuFeatures::MessageShot::getSelectedColorFromDefault()) {
+					const auto colorizer = ColorizerFrom(*scheme, color.value());
+					i->second->setColors(ColorsFromScheme(*scheme, colorizer));
+				} else {
+					i->second->setColors(ColorsFromScheme(*scheme));
+				}
+				return;
+			}
+
 			if (color) {
 				const auto colorizer = ColorizerFrom(*scheme, *color);
 				i->second->setColors(ColorsFromScheme(*scheme, colorizer));
@@ -2468,6 +2509,21 @@ void SetupDefaultThemes(
 			anim::type::instant);
 	};
 	group->setChangedCallback([=](Type type) {
+		if (AyuFeatures::MessageShot::isChoosingTheme()) {
+			palette->show(type);
+			refreshColorizer(type);
+			group->setValue(type);
+			AyuFeatures::MessageShot::setDefaultSelected(type);
+
+			const auto scheme = ranges::find(kSchemesList, type, &Scheme::type);
+			if (scheme == end(kSchemesList)) {
+				return;
+			}
+
+			updateMessageShotPalette(scheme->path);
+			return;
+		}
+
 		const auto scheme = ranges::find(
 			kSchemesList,
 			type,
@@ -2560,8 +2616,36 @@ void SetupDefaultThemes(
 		}
 	}, block->lifetime());
 
+	if (AyuFeatures::MessageShot::isChoosingTheme()) {
+		palette->selected() | rpl::on_next(
+			[=](QColor color)
+			{
+				AyuFeatures::MessageShot::setDefaultSelectedColor(color);
+				refreshColorizer(AyuFeatures::MessageShot::getSelectedFromDefault());
+
+				const auto type = chosen();
+				const auto scheme = ranges::find(kSchemesList, type, &Scheme::type);
+				if (scheme == end(kSchemesList)) {
+					return;
+				}
+
+				updateMessageShotPalette(scheme->path);
+			},
+			container->lifetime());
+
+		AyuFeatures::MessageShot::resetDefaultSelectedEvents() | rpl::on_next([=]
+			{
+				refreshColorizer(AyuFeatures::MessageShot::getSelectedFromDefault()); // hide colorizer
+				group->setValue(Type(-1));
+			},
+			container->lifetime());
+	}
+
 	palette->selected(
 	) | rpl::on_next([=](QColor color) {
+		if (AyuFeatures::MessageShot::isChoosingTheme()) {
+			return;
+		}
 		if (Background()->editingTheme()) {
 			window->show(Ui::MakeInformBox(
 				tr::lng_theme_editor_cant_change_theme()));

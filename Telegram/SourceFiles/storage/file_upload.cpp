@@ -48,8 +48,8 @@ constexpr auto kDocumentUploadPartSize3 = 256 * 1024;
 // 512kb for large document ( <= 1500mb )
 constexpr auto kDocumentUploadPartSize4 = 512 * 1024;
 
-// One part each half second, if not uploaded faster.
-constexpr auto kUploadRequestInterval = crl::time(250);
+// One part each 200ms, if not uploaded faster.
+constexpr auto kUploadRequestInterval = crl::time(200);
 
 // How much time without upload causes additional session kill.
 constexpr auto kKillSessionTimeout = 15 * crl::time(1000);
@@ -266,16 +266,14 @@ void Uploader::sendProgressUpdate(
 		Api::SendProgressType type,
 		int progress) {
 	const auto history = item->history();
-	if (!item->isEphemeral()) {
-		auto &manager = _api->session().sendProgressManager();
-		manager.update(history, type, progress);
-		if (const auto replyTo = item->replyToTop()) {
-			if (history->peer->isMegagroup()) {
-				manager.update(history, replyTo, type, progress);
-			}
-		} else if (history->isForum()) {
-			manager.update(history, item->topicRootId(), type, progress);
+	auto &manager = _api->session().sendProgressManager();
+	manager.update(history, type, progress);
+	if (const auto replyTo = item->replyToTop()) {
+		if (history->peer->isMegagroup()) {
+			manager.update(history, replyTo, type, progress);
 		}
+	} else if (history->isForum()) {
+		manager.update(history, item->topicRootId(), type, progress);
 	}
 	_api->session().data().requestItemRepaint(item);
 }
@@ -336,8 +334,6 @@ void Uploader::upload(
 		if (!file->filepath.isEmpty()) {
 			document->setLocation(Core::FileLocation(file->filepath));
 		} else if (!file->content.isEmpty()
-			&& !document->saveToCache()
-			&& !document->useStreamingLoader()
 			&& Core::App().canSaveFileWithoutAskingForPath()) {
 			const auto path = DocumentFileNameForSave(document);
 			if (!path.isEmpty()) {

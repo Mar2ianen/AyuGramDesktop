@@ -40,6 +40,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/ui_utility.h"
 #include "apiwrap.h"
 #include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 
 namespace Data {
 namespace {
@@ -562,7 +563,7 @@ std::unique_ptr<Ui::Text::CustomEmoji> CustomEmojiManager::create(
 			create(original, std::move(update), SizeTag::Large));
 	} else if (data.startsWith(ForceStaticPrefix())) {
 		const auto original = data.mid(ForceStaticPrefix().size());
-		return MakeWrappedEmoji<Ui::Text::FirstFrameEmoji>(
+		return std::make_unique<Ui::Text::FirstFrameEmoji>(
 			create(original, std::move(update), tag, sizeOverride));
 	} else if (data.startsWith(UserpicEmojiPrefix())) {
 		const auto ratio = style::DevicePixelRatio();
@@ -1039,6 +1040,10 @@ TextWithEntities SingleCustomEmoji(not_null<DocumentData*> document) {
 bool AllowEmojiWithoutPremium(
 		not_null<PeerData*> peer,
 		DocumentData *exactEmoji) {
+	if (true) { // AyuGram: allow all premium emojis (via tg://emoji?id=...)
+		return true;
+	}
+
 	if (peer->isSelf()) {
 		return true;
 	} else if (!exactEmoji) {
@@ -1088,8 +1093,8 @@ Ui::Text::CustomEmojiFactory ReactedMenuFactory(
 				const auto tag = Data::CustomEmojiManager::SizeTag::Normal;
 				const auto ratio = style::DevicePixelRatio();
 				const auto skip = (Data::FrameSizeFromTag(tag) / ratio - size) / 2;
-				return MakeWrappedEmoji<Ui::Text::FirstFrameEmoji>(
-					MakeWrappedEmoji<Ui::Text::ShiftedEmoji>(
+				return std::make_unique<Ui::Text::FirstFrameEmoji>(
+					std::make_unique<Ui::Text::ShiftedEmoji>(
 						owner->customEmojiManager().create(
 							document,
 							context.repaint,

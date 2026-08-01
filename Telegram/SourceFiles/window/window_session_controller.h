@@ -16,9 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_type.h"
 #include "window/window_adaptive.h"
 
-#include <QtCore/QDate>
-#include <QtCore/QPointer>
-
 class PhotoData;
 class MainWidget;
 class MainWindow;
@@ -87,7 +84,6 @@ struct CloudTheme;
 enum class CloudThemeType;
 class PhotoMedia;
 class Thread;
-class CommunityInfo;
 class Forum;
 class ForumTopic;
 class SavedSublist;
@@ -112,7 +108,6 @@ using GifPauseReason = ChatHelpers::PauseReason;
 using GifPauseReasons = ChatHelpers::PauseReasons;
 
 class SectionMemento;
-class SectionWidget;
 class Controller;
 class FiltersMenu;
 class ChatPreviewManager;
@@ -212,11 +207,9 @@ struct SectionShow {
 	bool childColumn = false;
 	bool forbidLayer = false;
 	bool forceTopicsList = false;
-	bool preferCurrentWindow = false;
 	bool reapplyLocalDraft = false;
 	bool dropSameFromStack = false;
 	bool allowDuplicateInStack = false;
-	bool slideFromBottom = false;
 	Origin origin;
 
 };
@@ -419,7 +412,6 @@ public:
 	[[nodiscard]] SeparateId windowId() const;
 	[[nodiscard]] bool isPrimary() const;
 	[[nodiscard]] not_null<::MainWindow*> widget() const;
-	[[nodiscard]] rpl::producer<> imeCompositionStarts() const;
 	[[nodiscard]] not_null<MainWidget*> content() const;
 	[[nodiscard]] Adaptive &adaptive() const;
 	[[nodiscard]] ChatHelpers::EmojiInteractions &emojiInteractions() const {
@@ -466,10 +458,6 @@ public:
 		MsgId showAtMsgId = ShowAtUnreadMsgId);
 	void closeForum();
 	const rpl::variable<Data::Forum*> &shownForum() const;
-
-	void openCommunity(not_null<Data::CommunityInfo*> info);
-	void closeCommunity();
-	const rpl::variable<Data::CommunityInfo*> &openedCommunity() const;
 
 	void setActiveChatEntry(Dialogs::RowDescriptor row);
 	void setActiveChatEntry(Dialogs::Key key);
@@ -564,10 +552,6 @@ public:
 	}
 	void removeLayerBlackout();
 	[[nodiscard]] bool isLayerShown() const;
-	[[nodiscard]] rpl::producer<bool> boxShownValue() const;
-	void registerActiveLayerSection(SectionWidget *section);
-	void unregisterActiveLayerSection(SectionWidget *section);
-	[[nodiscard]] SectionWidget *activeLayerSection() const;
 
 	struct ShowCalendarDescriptor {
 		Dialogs::Key chat;
@@ -752,6 +736,11 @@ public:
 		return _lifetime;
 	}
 
+	// AyuGram filters
+	std::optional<long long> dialogId;
+	std::vector<char> filterId;
+	std::optional<bool> showExclude; // whether to show exclude button in the top bar
+	bool shadowBan = false;
 private:
 	struct CachedThemeKey;
 	struct CachedTheme;
@@ -798,8 +787,6 @@ private:
 	void checkNonPremiumLimitToastUpload(FullMsgId id);
 
 	bool openFolderInDifferentWindow(not_null<Data::Folder*> folder);
-	bool openCommunityInDifferentWindow(
-		not_null<Data::CommunityInfo*> info);
 	bool showForumInDifferentWindow(
 		not_null<Data::Forum*> forum,
 		const SectionShow &params,
@@ -861,19 +848,15 @@ private:
 	rpl::variable<int> _connectingBottomSkip;
 
 	rpl::event_stream<ChatHelpers::FileChosen> _stickerOrEmojiChosen;
-	QPointer<SectionWidget> _activeLayerSection;
 
 	PeerData *_showEditPeer = nullptr;
 	rpl::variable<Data::Folder*> _openedFolder;
 	rpl::variable<Data::Forum*> _shownForum;
 	rpl::lifetime _shownForumLifetime;
-	rpl::variable<Data::CommunityInfo*> _openedCommunity;
-	rpl::lifetime _openedCommunityLifetime;
 
 	rpl::event_stream<> _filtersMenuChanged;
 
 	const std::shared_ptr<Ui::ChatTheme> _defaultChatTheme;
-	std::vector<QColor> _defaultChatThemeBubblesColors;
 	base::flat_map<CachedThemeKey, CachedTheme> _customChatThemes;
 	rpl::event_stream<std::shared_ptr<Ui::ChatTheme>> _cachedThemesStream;
 	rpl::event_stream<> _giftSymbolLoaded;

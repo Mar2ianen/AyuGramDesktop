@@ -23,7 +23,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/ui_utility.h"
-#include "data/data_premium_limits.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_forum_topic.h"
@@ -45,20 +44,35 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
 
+// AyuGram includes
+#include "ayu/utils/telegram_helpers.h"
+#include "ayu/features/streamer_mode/streamer_mode.h"
+
+
 namespace Window {
 namespace Notifications {
 namespace Default {
 namespace {
+
+[[nodiscard]] int notifyWidth() {
+	const auto corner = Core::App().settings().notificationsCorner();
+	return Core::Settings::IsTopCenterCorner(corner) ? st::notifyWidth * 1.5 : st::notifyWidth;
+}
 
 [[nodiscard]] QPoint notificationStartPosition() {
 	const auto corner = Core::App().settings().notificationsCorner();
 	const auto r = NotificationDisplayRect(Core::App().activePrimaryWindow());
 	const auto isLeft = Core::Settings::IsLeftCorner(corner);
 	const auto isTop = Core::Settings::IsTopCorner(corner);
-	const auto x = (isLeft == rtl())
-		? (r.x() + r.width() - st::notifyWidth - st::notifyDeltaX)
+	auto x = (isLeft == rtl())
+		? (r.x() + r.width() - notifyWidth() - st::notifyDeltaX)
 		: (r.x() + st::notifyDeltaX);
 	const auto y = isTop ? r.y() : (r.y() + r.height());
+
+	if (Core::Settings::IsTopCenterCorner(corner)) {
+		x = (r.x() + r.width() / 2 - notifyWidth() / 2);
+	}
+
 	return QPoint(x, y);
 }
 
@@ -677,7 +691,7 @@ Notification::Notification(
 	}
 
 	auto position = computePosition(st::notifyMinHeight);
-	updateGeometry(position.x(), position.y(), st::notifyWidth, st::notifyMinHeight);
+	updateGeometry(position.x(), position.y(), notifyWidth(), st::notifyMinHeight);
 
 	_userpicLoaded = !Ui::PeerUserpicLoading(_userpicView);
 	updateNotifyDisplay();
@@ -714,6 +728,10 @@ Notification::Notification(
 	}, lifetime());
 
 	show();
+
+	if (AyuFeatures::StreamerMode::isEnabled()) {
+		AyuFeatures::StreamerMode::hideWidgetWindow(this);
+	}
 }
 
 void Notification::updateReplyGeometry() {
@@ -1004,7 +1022,7 @@ void Notification::updateNotifyDisplay() {
 				: TextWithEntities{ name };
 		};
 		auto title = options.hideNameAndPhoto
-			? TextWithEntities{ u"Telegram Desktop"_q }
+			? TextWithEntities{ u"AyuGram Desktop"_q }
 			: reminder
 			? tr::lng_notification_reminder(tr::now, tr::marked)
 			: topicWithChat();
@@ -1116,8 +1134,7 @@ void Notification::showReplyField() {
 	_replyArea->moveToLeft(st::notifyBorderWidth, st::notifyMinHeight);
 	_replyArea->show();
 	_replyArea->setFocus();
-	_replyArea->setMaxLength(
-		Data::PremiumLimits(&_item->history()->session()).messageLengthCurrent());
+	_replyArea->setMaxLength(MaxMessageSize);
 	_replyArea->setSubmitSettings(Ui::InputField::SubmitSettings::Both);
 	InitMessageFieldHandlers({
 		.session = &_item->history()->session(),
@@ -1193,17 +1210,8 @@ bool Notification::unlinkHistory(
 bool Notification::unlinkSession(not_null<Main::Session*> session) {
 	const auto unlink = _history && (&_history->session() == session);
 	if (unlink) {
-		// Custom emoji in title and text caches are owned by the session,
-		// while the widget outlives it for the hide animation, so caches
-		// must be destroyed right here. The already rendered _cache image
-		// is still painted, so don't re-render it from the empty strings.
-		_titleCache = Ui::Text::String();
-		_textCache = Ui::Text::String();
-		_textsRepaintScheduled = false;
 		hideFast();
 		_history = nullptr;
-		_topic = nullptr;
-		_sublist = nullptr;
 		_item = nullptr;
 	}
 	return unlink;
@@ -1272,7 +1280,7 @@ HideAllButton::HideAllButton(
 	setCursor(style::cur_pointer);
 
 	auto position = computePosition(st::notifyHideAllHeight);
-	updateGeometry(position.x(), position.y(), st::notifyWidth, st::notifyHideAllHeight);
+	updateGeometry(position.x(), position.y(), notifyWidth(), st::notifyHideAllHeight);
 
 	style::PaletteChanged(
 	) | rpl::on_next([=] {
@@ -1280,6 +1288,10 @@ HideAllButton::HideAllButton(
 	}, lifetime());
 
 	show();
+
+	if (AyuFeatures::StreamerMode::isEnabled()) {
+		AyuFeatures::StreamerMode::hideWidgetWindow(this);
+	}
 }
 
 void HideAllButton::startHiding() {

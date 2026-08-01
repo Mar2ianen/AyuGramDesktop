@@ -15,7 +15,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "media/audio/media_audio.h"
 #include "media/clip/media_clip_reader.h"
-#include "media/media_common.h"
 #include "media/player/media_player_instance.h"
 #include "media/streaming/media_streaming_instance.h"
 #include "media/streaming/media_streaming_player.h"
@@ -29,12 +28,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/history.h"
 #include "history/view/history_view_element.h"
-#include "history/view/history_view_message.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_reply.h"
 #include "history/view/history_view_transcribe_button.h"
 #include "history/view/media/history_view_document.h" // TTLVoiceStops
-#include "history/view/media/history_view_ephemeral_plate.h"
 #include "history/view/media/history_view_media_common.h"
 #include "history/view/media/history_view_media_spoiler.h"
 #include "window/window_session_controller.h"
@@ -62,10 +59,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_web_page.h"
 #include "storage/storage_account.h"
 #include "styles/style_chat.h"
-#include "styles/style_chat_style.h"
 
 #include <QSvgRenderer>
 #include <QtWidgets/QApplication>
+
+// AyuGram includes
+#include "ayu/features/message_shot/message_shot.h"
+
 
 namespace HistoryView {
 namespace {
@@ -73,38 +73,8 @@ namespace {
 constexpr auto kMaxGifForwardedBarLines = 4;
 constexpr auto kUseNonBlurredThreshold = 240;
 constexpr auto kMaxInlineArea = 1920 * 1080;
-constexpr auto kMaxInstantViewInlineArea = 1920 * 1920;
 constexpr auto kSeekAnimationDuration = crl::time(200);
 constexpr auto kSeekTrackOpacity = 0.2;
-
-using ::Media::ValidFrameSize;
-
-[[nodiscard]] bool IsHostedInstantViewMedia(not_null<const Element*> parent) {
-	return parent->Get<InstantViewMediaRuntime>() != nullptr;
-}
-
-[[nodiscard]] double HostedInstantViewMediaPixelScale(
-		not_null<const Element*> parent) {
-	const auto runtime = parent->Get<InstantViewMediaRuntime>();
-	return runtime ? runtime->mediaPixelScale : 1.;
-}
-
-[[nodiscard]] QSize ScaledInstantViewMediaSize(QSize size, double scale) {
-	return (scale == 1.)
-		? size
-		: QSize(
-			std::max(qRound(size.width() * scale), 1),
-			std::max(qRound(size.height() * scale), 1));
-}
-
-[[nodiscard]] QSize HostedInstantViewForcedSize(
-		not_null<const Element*> parent,
-		not_null<const Media*> media) {
-	const auto runtime = parent->Get<InstantViewMediaRuntime>();
-	return (runtime && runtime->forcedFor == media)
-		? runtime->forcedSize
-		: QSize();
-}
 
 [[nodiscard]] int GifMaxStatusWidth(not_null<DocumentData*> document) {
 	auto result = st::normalFont->width(
@@ -126,10 +96,10 @@ using ::Media::ValidFrameSize;
 		const auto centerRect = r - centerMargins;
 		const auto &icon = context.imageStyle()->historyVideoMessageTtlIcon;
 		const auto iconRect = QRect(
-			rect::right(centerRect) - icon.width() * 0.75,
-			rect::bottom(centerRect) - icon.height() * 0.75,
-			icon.width(),
-			icon.height());
+			rect::right(centerRect) - icon.width() * 1.2,
+			rect::bottom(centerRect) - icon.height() * 1.2,
+			icon.width() / 3,
+			icon.height() / 3);
 		{
 			auto hq = PainterHighQualityEnabler(p);
 			auto path = QPainterPath();
@@ -195,8 +165,7 @@ Gif::Gif(
 , _videoTimestamp(::Media::View::ExtractVideoTimestamp(realParent))
 , _sensitiveSpoiler(realParent->isMediaSensitive())
 , _hasVideoCover(realParent->media() && realParent->media()->videoCover()) {
-	const auto media = _parent->data()->media();
-	if (_data->isVideoMessage() && media && media->ttlSeconds()) {
+	if (_data->isVideoMessage() && _parent->data()->media()->ttlSeconds()) {
 		if (_spoiler) {
 			_drawTtl = CreateTtlPaintCallback([=] { repaint(); });
 		}
@@ -225,7 +194,7 @@ Gif::Gif(
 			if (!_data->createMediaView()->canBePlayed()
 				|| !_data->isAnimation()
 				|| _data->isVideoMessage()
-				|| !canPlayInline()) {
+				|| !CanPlayInline(_data)) {
 				return false;
 			}
 			playAnimation(false);
@@ -235,7 +204,7 @@ Gif::Gif(
 
 	setStatusSize(Ui::FileStatusSizeReady);
 
-	if (_data->isVideoMessage() && (!media || !media->ttlSeconds())) {
+	if (_data->isVideoMessage() && !_parent->data()->media()->ttlSeconds()) {
 		_seekl = std::make_shared<VoiceSeekClickHandler>(
 			_data,
 			[](FullMsgId) {});
@@ -279,17 +248,8 @@ Gif::~Gif() {
 }
 
 bool Gif::CanPlayInline(not_null<DocumentData*> document) {
-	return ValidFrameSize(document->dimensions, kMaxInlineArea);
-}
-
-int Gif::maxInlineArea() const {
-	return IsHostedInstantViewMedia(_parent)
-		? kMaxInstantViewInlineArea
-		: kMaxInlineArea;
-}
-
-bool Gif::canPlayInline() const {
-	return ValidFrameSize(_data->dimensions, maxInlineArea());
+	const auto dimensions = document->dimensions;
+	return dimensions.width() * dimensions.height() <= kMaxInlineArea;
 }
 
 QSize Gif::sizeForAspectRatio() const {
@@ -300,29 +260,19 @@ QSize Gif::sizeForAspectRatio() const {
 	//}
 	if (_data->hasThumbnail()) {
 		const auto &location = _data->thumbnailLocation();
-		return NonEmptySize({ location.width(), location.height() });
+		return { location.width(), location.height() };
 	}
 	return { 1, 1 };
 }
 
 QSize Gif::countThumbSize(int &inOutWidthMax) const {
-	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
-	const auto maxSize = [&] {
-		if (hostedInstantView) {
-			return std::max(inOutWidthMax, 1);
-		} else if (_data->isVideoFile()) {
-			return st::maxMediaSize;
-		} else if (_data->isVideoMessage()) {
-			return st::maxVideoMessageSize;
-		}
-		return st::maxGifSize;
-	}();
+	const auto maxSize = _data->isVideoFile()
+		? st::maxMediaSize
+		: _data->isVideoMessage()
+		? st::maxVideoMessageSize
+		: st::maxGifSize;
 	const auto size = style::ConvertScale(videoSize());
-	if (hostedInstantView) {
-		inOutWidthMax = std::max(inOutWidthMax, 1);
-	} else {
-		accumulate_min(inOutWidthMax, maxSize);
-	}
+	accumulate_min(inOutWidthMax, maxSize);
 	return DownscaledSize(size, { inOutWidthMax, maxSize });
 }
 
@@ -334,20 +284,12 @@ QSize Gif::countOptimalSize() {
 			entry.shown && (entry.requestId || entry.pending));
 	}
 
-	if (const auto forced = HostedInstantViewForcedSize(_parent, this)
-		; !forced.isEmpty()) {
-		return forced;
-	}
-	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
-	const auto maxMediaWidth = hostedInstantView
-		? std::max(st::msgMaxWidth, st::maxMediaSize)
-		: st::maxMediaSize;
 	const auto minWidth = std::clamp(
 		_parent->minWidthForMedia(),
 		(_parent->hasBubble()
 			? st::historyPhotoBubbleMinWidth
 			: st::minPhotoSize),
-		maxMediaWidth);
+		st::maxMediaSize);
 	auto thumbMaxWidth = st::msgMaxWidth;
 	const auto scaled = countThumbSize(thumbMaxWidth);
 	auto maxWidth = std::min(
@@ -373,7 +315,6 @@ QSize Gif::countOptimalSize() {
 		if (forwarded) {
 			forwarded->create(via, item);
 		}
-		RefreshEphemeralPlate(_parent, _ephemeral.text);
 		maxWidth += additionalWidth(reply, via, forwarded);
 		accumulate_max(maxWidth, _parent->reactionsOptimalWidth());
 	}
@@ -381,25 +322,15 @@ QSize Gif::countOptimalSize() {
 }
 
 QSize Gif::countCurrentSize(int newWidth) {
-	if (const auto forced = HostedInstantViewForcedSize(_parent, this)
-		; !forced.isEmpty()) {
-		return forced;
-	}
 	auto availableWidth = newWidth;
-	_ephemeral.onTop = false;
-	_ephemeral.topAdded = 0;
 
-	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
 	auto thumbMaxWidth = newWidth;
 	const auto scaled = countThumbSize(thumbMaxWidth);
-	const auto minWidthByInfo = hostedInstantView
-		? _parent->minWidthForMedia()
-		: (_parent->infoWidth()
-			+ 2 * (st::msgDateImgDelta + st::msgDateImgPadding.x()));
-	const auto minPhotoWidth = std::min(st::minPhotoSize, thumbMaxWidth);
+	const auto minWidthByInfo = _parent->infoWidth()
+		+ 2 * (st::msgDateImgDelta + st::msgDateImgPadding.x());
 	newWidth = std::clamp(
 		std::max(scaled.width(), minWidthByInfo),
-		minPhotoWidth,
+		st::minPhotoSize,
 		thumbMaxWidth);
 	auto newHeight = qMax(scaled.height(), st::minPhotoSize);
 	if (!activeCurrentStreamed()) {
@@ -427,44 +358,17 @@ QSize Gif::countCurrentSize(int newWidth) {
 		auto via = item->Get<HistoryMessageVia>();
 		auto reply = _parent->Get<Reply>();
 		auto forwarded = item->Get<HistoryMessageForwarded>();
-		RefreshEphemeralPlate(_parent, _ephemeral.text);
-		if (via || reply || forwarded || !_ephemeral.text.isEmpty()) {
+		if (via || reply || forwarded) {
 			auto additional = additionalWidth(reply, via, forwarded);
 			newWidth += additional;
 			accumulate_min(newWidth, availableWidth);
-			const auto usew = maxWidth() - additional;
-			if (!_ephemeral.text.isEmpty()) {
-				const auto contentWidth = _data->isVideoMessage()
-					? std::min(usew, newHeight)
-					: usew;
-				const auto sideRoom = newWidth
-					- contentWidth
-					- st::msgReplyPadding.left();
-				_ephemeral.onTop = (sideRoom
-					< EphemeralPlateMaxWidth(_ephemeral.text));
-			}
-			const auto rectw = _ephemeral.onTop
-				? std::min(newWidth - st::msgReplyPadding.left(), additional)
-				: (newWidth - usew - st::msgReplyPadding.left());
-			const auto availw = rectw
-				- st::msgReplyPadding.left()
-				- st::msgReplyPadding.left();
+			auto usew = maxWidth() - additional;
+			auto availw = newWidth - usew - st::msgReplyPadding.left() - st::msgReplyPadding.left() - st::msgReplyPadding.left();
 			if (!forwarded && via) {
 				via->resize(availw);
 			}
 			if (reply) {
 				[[maybe_unused]] int height = reply->resizeToWidth(availw);
-			}
-			if (_ephemeral.onTop) {
-				const auto plate = EphemeralPlateSize(
-					_ephemeral.text,
-					newWidth - st::msgReplyPadding.left());
-				_ephemeral.topAdded = plate.height()
-					+ st::msgReplyPadding.top()
-					+ ((via || reply || forwarded)
-						? surroundingHeight(reply, via, forwarded, rectw)
-						: 0);
-				newHeight += _ephemeral.topAdded;
 			}
 		}
 	}
@@ -550,7 +454,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto canBePlayed = _dataMedia->canBePlayed();
 	const auto autoplay = autoplayEnabled()
 		&& canBePlayed
-		&& canPlayInline();
+		&& CanPlayInline(_data);
 	const auto activeRoundPlaying = activeRoundStreamed();
 
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
@@ -558,13 +462,10 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto rightLayout = _parent->hasRightLayout();
 	const auto inWebPage = (_parent->media() != this);
 	const auto isRound = _data->isVideoMessage();
-	const auto hostedInstantView = IsHostedInstantViewMedia(_parent);
 
-	const auto inWebPageWithoutOwnRounding = inWebPage
-		&& bubbleRounding() == Ui::BubbleRounding();
-	const auto rounding = hostedInstantView
-		? std::optional<Ui::BubbleRounding>(Ui::BubbleRounding())
-		: inWebPageWithoutOwnRounding
+	const auto rounding = (inWebPage
+			// Dangerous change.
+			&& bubbleRounding() == Ui::BubbleRounding())
 		? std::optional<Ui::BubbleRounding>()
 		: adjustedBubbleRounding();
 
@@ -574,15 +475,11 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto reply = unwrapped ? _parent->Get<Reply>() : nullptr;
 	const auto forwarded = unwrapped ? item->Get<HistoryMessageForwarded>() : nullptr;
 	const auto rightAligned = unwrapped && rightLayout;
-	if (via || reply || forwarded || !_ephemeral.text.isEmpty()) {
+	if (via || reply || forwarded) {
 		usew = maxWidth() - additionalWidth(reply, via, forwarded);
 		if (rightAligned) {
 			usex = width() - usew;
 		}
-	}
-	if (_ephemeral.onTop) {
-		painty += _ephemeral.topAdded;
-		painth -= _ephemeral.topAdded;
 	}
 	if (isRound) {
 		accumulate_min(usew, painth);
@@ -594,7 +491,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto inTTLViewer = _parent->delegate()->elementContext()
 		== Context::TTLViewer;
 	const auto revealed = (isRound
-			&& item->media()
 			&& item->media()->ttlSeconds()
 			&& !inTTLViewer)
 		? 0
@@ -647,7 +543,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto radial = isRadialAnimation()
 		|| (streamedForWaiting && streamedForWaiting->waitingShown());
 
-	if (!bubble && !unwrapped && !hostedInstantView) {
+	if (!bubble && !unwrapped) {
 		Assert(rounding.has_value());
 		fillImageShadow(p, rthumb, *rounding, context);
 	}
@@ -661,10 +557,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		}
 		auto paused = context.paused || !shouldBePlaying;
 		auto request = ::Media::Streaming::FrameRequest{
-			.outer = (ScaledInstantViewMediaSize(
-				QSize(usew, painth),
-				HostedInstantViewMediaPixelScale(_parent))
-				* style::DevicePixelRatio()),
+			.outer = QSize(usew, painth) * style::DevicePixelRatio(),
 			.blurredBackground = true,
 		};
 		if (isRound) {
@@ -723,7 +616,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	if (revealed < 1.) {
 		p.setOpacity(1. - revealed);
 		if (!isRound) {
-			p.drawImage(rthumb, _spoiler->background);
+			p.drawImage(rthumb.topLeft(), _spoiler->background);
 			fillImageSpoiler(p, _spoiler.get(), rthumb, context);
 		} else {
 			auto frame = _spoiler->background;
@@ -747,7 +640,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		&& (radial
 			|| (!streamingMode
 				&& ((!loaded && !_data->loading()) || !autoplay)));
-	if (paintInCenter) {
+	if (paintInCenter && !AyuFeatures::MessageShot::isTakingShot()) {
 		const auto radialRevealed = 1.;
 		const auto opacity = (item->isSending() || _data->uploading())
 			? 1.
@@ -820,7 +713,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			return spoilerTagBackground();
 		});
 	}
-	if (displayMute) {
+	if (displayMute && !AyuFeatures::MessageShot::isTakingShot()) {
 		auto muteRect = style::rtlrect(rthumb.x() + (rthumb.width() - st::historyVideoMessageMuteSize) / 2, rthumb.y() + st::msgDateImgDelta, st::historyVideoMessageMuteSize, st::historyVideoMessageMuteSize, width());
 		p.setPen(Qt::NoPen);
 		p.setBrush(sti->msgDateImgBg);
@@ -836,14 +729,14 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, rthumb, context);
 	}
 
-	if (!unwrapped && !skipDrawingSurrounding) {
+	if (!unwrapped && !skipDrawingSurrounding && !AyuFeatures::MessageShot::ignoreRender(AyuFeatures::MessageShot::RenderPart::Date)) {
 		const auto sponsoredSkip = !_data->isVideoFile()
 			&& _realParent->isSponsored();
 		if ((!isRound || !inWebPage) && !sponsoredSkip) {
 			drawCornerStatus(p, context, QPoint());
 		}
 	} else if (!skipDrawingSurrounding) {
-		if (isRound) {
+		if (isRound && !AyuFeatures::MessageShot::ignoreRender(AyuFeatures::MessageShot::RenderPart::Date)) {
 			const auto mediaUnread = item->hasUnreadMediaFlag();
 			const auto statusText = _seeking
 				? Ui::FormatDurationText(1 + int64(base::SafeRound(
@@ -871,39 +764,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 			ensureTranscribeButton();
 		}
-		const auto ephemeralPlate = _ephemeral.text.isEmpty()
-			? QSize()
-			: EphemeralPlateSize(
-				_ephemeral.text,
-				_ephemeral.onTop
-					? (width() - st::msgReplyPadding.left())
-					: (width() - usew - st::msgReplyPadding.left()));
-		const auto platey = painty - _ephemeral.topAdded;
-		const auto plateOffset = ephemeralPlate.isEmpty()
-			? 0
-			: (ephemeralPlate.height() + st::msgReplyPadding.top());
-		if (!ephemeralPlate.isEmpty()) {
-			auto platex = _ephemeral.onTop
-				? (rightAligned ? (width() - ephemeralPlate.width()) : 0)
-				: (rightAligned ? 0 : (usew + st::msgReplyPadding.left()));
-			if (rtl()) {
-				platex = width() - platex - ephemeralPlate.width();
-			}
-			PaintEphemeralPlate(
-				p,
-				context,
-				_ephemeral.text,
-				platex,
-				platey,
-				ephemeralPlate.width(),
-				width());
-		}
 		if (via || reply || forwarded) {
-			auto rectw = _ephemeral.onTop
-				? std::min(
-					width() - st::msgReplyPadding.left(),
-					additionalWidth(reply, via, forwarded))
-				: (width() - usew - st::msgReplyPadding.left());
+			auto rectw = width() - usew - st::msgReplyPadding.left();
 			auto innerw = rectw - (st::msgReplyPadding.left() + st::msgReplyPadding.right());
 			auto recth = 0;
 			auto forwardedHeightReal = forwarded ? forwarded->text.countHeight(innerw) : 0;
@@ -921,10 +783,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			} else {
 				recth += st::msgReplyPadding.bottom();
 			}
-			int rectx = _ephemeral.onTop
-				? (rightAligned ? (width() - rectw) : 0)
-				: (rightAligned ? 0 : (usew + st::msgReplyPadding.left()));
-			int recty = platey + plateOffset;
+			int rectx = rightAligned ? 0 : (usew + st::msgReplyPadding.left());
+			int recty = painty;
 			if (rtl()) rectx = width() - rectx - rectw;
 
 			Ui::FillRoundRect(p, rectx, recty, rectw, recth, sti->msgServiceBg, sti->msgServiceBgCornersSmall);
@@ -958,7 +818,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 	}
-	if (!inWebPage && !skipDrawingSurrounding) {
+	if (!inWebPage && !skipDrawingSurrounding && !AyuFeatures::MessageShot::ignoreRender(AyuFeatures::MessageShot::RenderPart::Date)) {
 		auto fullRight = paintx + usex + usew;
 		auto fullBottom = painty + painth;
 		auto maxRight = _parent->width() - st::msgMargin.left();
@@ -1226,16 +1086,13 @@ void Gif::validateThumbCache(
 			&& (normal->height() < kUseNonBlurredThreshold))
 		: !videothumb;
 	const auto ratio = style::DevicePixelRatio();
-	const auto scaled = ScaledInstantViewMediaSize(
-		outer,
-		HostedInstantViewMediaPixelScale(_parent));
-	if (_thumbCache.size() == (scaled * ratio)
+	if (_thumbCache.size() == (outer * ratio)
 		&& _thumbCacheRounding == rounding
 		&& _thumbCacheBlurred == blurred
 		&& _thumbIsEllipse == isEllipse) {
 		return;
 	}
-	auto cache = prepareThumbCache(scaled);
+	auto cache = prepareThumbCache(outer);
 	_thumbCache = isEllipse
 		? Images::Circle(std::move(cache))
 		: Images::Round(std::move(cache), MediaRoundingMask(rounding));
@@ -1289,10 +1146,7 @@ void Gif::validateSpoilerImageCache(
 	Expects(_spoiler != nullptr);
 
 	const auto ratio = style::DevicePixelRatio();
-	const auto scaled = ScaledInstantViewMediaSize(
-		outer,
-		HostedInstantViewMediaPixelScale(_parent));
-	if (_spoiler->background.size() == (scaled * ratio)
+	if (_spoiler->background.size() == (outer * ratio)
 		&& _spoiler->backgroundRounding == rounding) {
 		return;
 	}
@@ -1316,7 +1170,7 @@ void Gif::validateSpoilerImageCache(
 	const auto blurred = embedded ? embedded : downscale(normal);
 	_spoiler->background = Images::Round(
 		PrepareWithBlurredBackground(
-			scaled,
+			outer,
 			::Media::Streaming::ExpandDecision(),
 			nullptr,
 			blurred),
@@ -1340,7 +1194,7 @@ void Gif::drawCornerStatus(
 	const auto padding = st::msgDateImgPadding;
 	const auto radial = _animation && _animation->radial.animating();
 	const auto cornerDownload = downloadInCorner() && !dataLoaded() && !_data->loadedInMediaCache();
-	const auto cornerMute = _streamed && _data->isVideoFile() && !cornerDownload;
+	const auto cornerMute = _streamed && _data->isVideoFile() && !cornerDownload && !AyuFeatures::MessageShot::isTakingShot();
 	const auto addLeft = cornerDownload ? (st::historyVideoDownloadSize + 2 * padding.y()) : 0;
 	const auto addRight = cornerMute ? st::historyVideoMuteSize : 0;
 	const auto downloadWidth = cornerDownload ? st::normalFont->width(_downloadSize) : 0;
@@ -1354,7 +1208,7 @@ void Gif::drawCornerStatus(
 	p.setFont(st::normalFont);
 	p.setPen(st->msgDateImgFg());
 	p.drawTextLeft(statusX + addLeft, statusTextTop, width(), text, statusW - 2 * padding.x());
-	if (cornerDownload) {
+	if (cornerDownload && !AyuFeatures::MessageShot::isTakingShot()) {
 		const auto downloadTextTop = statusY + st::normalFont->height + (2 * (statusH - 2 * st::normalFont->height) / 3) - padding.y();
 		p.drawTextLeft(statusX + addLeft, downloadTextTop, width(), _downloadSize, statusW - 2 * padding.x());
 		const auto inner = QRect(statusX + padding.y() - padding.x(), statusY, st::historyVideoDownloadSize, st::historyVideoDownloadSize);
@@ -1408,58 +1262,19 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	const auto reply = unwrapped ? _parent->Get<Reply>() : nullptr;
 	const auto forwarded = unwrapped ? item->Get<HistoryMessageForwarded>() : nullptr;
 	const auto rightAligned = unwrapped && rightLayout;
-	if (via || reply || forwarded || !_ephemeral.text.isEmpty()) {
+	if (via || reply || forwarded) {
 		usew = maxWidth() - additionalWidth(reply, via, forwarded);
 		if (rightAligned) {
 			usex = width() - usew;
 		}
-	}
-	if (_ephemeral.onTop) {
-		painty += _ephemeral.topAdded;
-		painth -= _ephemeral.topAdded;
 	}
 	if (isRound) {
 		accumulate_min(usew, painth);
 	}
 	if (rtl()) usex = width() - usex - usew;
 
-	const auto ephemeralPlate = _ephemeral.text.isEmpty()
-		? QSize()
-		: EphemeralPlateSize(
-			_ephemeral.text,
-			_ephemeral.onTop
-				? (paintw - st::msgReplyPadding.left())
-				: (paintw - usew - st::msgReplyPadding.left()));
-	const auto platey = painty - _ephemeral.topAdded;
-	const auto plateOffset = ephemeralPlate.isEmpty()
-		? 0
-		: (ephemeralPlate.height() + st::msgReplyPadding.top());
-	if (!ephemeralPlate.isEmpty()) {
-		auto platex = _ephemeral.onTop
-			? (rightAligned ? (width() - ephemeralPlate.width()) : 0)
-			: (rightAligned ? 0 : (usew + st::msgReplyPadding.left()));
-		if (rtl()) {
-			platex = width() - platex - ephemeralPlate.width();
-		}
-		if (EphemeralPlateState(
-				_parent,
-				_ephemeral.text,
-				point,
-				platex,
-				platey,
-				ephemeralPlate.width(),
-				ephemeralPlate.height(),
-				request,
-				result)) {
-			return result;
-		}
-	}
 	if (via || reply || forwarded) {
-		auto rectw = _ephemeral.onTop
-			? std::min(
-				paintw - st::msgReplyPadding.left(),
-				additionalWidth(reply, via, forwarded))
-			: (paintw - usew - st::msgReplyPadding.left());
+		auto rectw = paintw - usew - st::msgReplyPadding.left();
 		auto innerw = rectw - (st::msgReplyPadding.left() + st::msgReplyPadding.right());
 		auto recth = 0;
 		auto forwardedHeightReal = forwarded ? forwarded->text.countHeight(innerw) : 0;
@@ -1477,10 +1292,8 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 		} else {
 			recth += st::msgReplyPadding.bottom();
 		}
-		auto rectx = _ephemeral.onTop
-			? (rightAligned ? (width() - rectw) : 0)
-			: (rightAligned ? 0 : (usew + st::msgReplyPadding.left()));
-		auto recty = platey + plateOffset;
+		auto rectx = rightAligned ? 0 : (usew + st::msgReplyPadding.left());
+		auto recty = painty;
 		if (rtl()) rectx = width() - rectx - rectw;
 
 		if (forwarded) {
@@ -1539,10 +1352,9 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	if (QRect(usex + paintx, painty, usew, painth).contains(point)) {
 		ensureDataMediaCreated();
 		if (_spoiler && !_spoiler->revealed) {
-			const auto media = _parent->data()->media();
 			result.link = _sensitiveSpoiler
 				? spoilerTagLink()
-				: (isRound && media && media->ttlSeconds())
+				: (isRound && _parent->data()->media()->ttlSeconds())
 				? _openl
 				: _spoiler->link;
 		} else if (_seekl && isRoundSeekable()) {
@@ -1667,7 +1479,7 @@ void Gif::updatePressed(QPoint point) {
 	const auto forwarded = unwrapped
 		? item->Get<HistoryMessageForwarded>()
 		: nullptr;
-	if (via || reply || forwarded || !_ephemeral.text.isEmpty()) {
+	if (via || reply || forwarded) {
 		usew = maxWidth() - additionalWidth(reply, via, forwarded);
 		if (unwrapped && _parent->hasRightLayout()) {
 			usex = width() - usew;
@@ -1753,7 +1565,7 @@ void Gif::drawGrouped(
 	const auto autoplay = !_smallGroupPart
 		&& autoplayEnabled()
 		&& canBePlayed
-		&& canPlayInline();
+		&& CanPlayInline(_data);
 	const auto canStartPlay = autoplay
 		&& !_streamed
 		&& !fullHiddenBySpoiler;
@@ -1794,16 +1606,12 @@ void Gif::drawGrouped(
 		const auto original = sizeForAspectRatio();
 		const auto originalWidth = style::ConvertScale(original.width());
 		const auto originalHeight = style::ConvertScale(original.height());
-		const auto scaled = ScaledInstantViewMediaSize(
-			geometry.size(),
-			HostedInstantViewMediaPixelScale(_parent));
 		const auto pixSize = Ui::GetImageScaleSizeForGeometry(
 			{ originalWidth, originalHeight },
-			{ scaled.width(), scaled.height() });
-		const auto ratio = style::DevicePixelRatio();
+			{ geometry.width(), geometry.height() });
 		auto request = ::Media::Streaming::FrameRequest{
-			.resize = pixSize * ratio,
-			.outer = scaled * ratio,
+			.resize = pixSize * style::DevicePixelRatio(),
+			.outer = geometry.size() * style::DevicePixelRatio(),
 			.rounding = MediaRoundingMask(rounding),
 		};
 		if (activeOwnPlaying->instance.playerLocked()) {
@@ -1835,7 +1643,7 @@ void Gif::drawGrouped(
 
 	if (revealed < 1.) {
 		p.setOpacity(1. - revealed);
-		p.drawImage(geometry, _spoiler->background);
+		p.drawImage(geometry.topLeft(), _spoiler->background);
 		fillImageSpoiler(p, _spoiler.get(), geometry, context);
 		p.setOpacity(1.);
 	}
@@ -1856,7 +1664,7 @@ void Gif::drawGrouped(
 		&& (radial
 			|| (!streamingMode
 				&& ((!loaded && !_data->loading()) || !autoplay)));
-	if (paintInCenter) {
+	if (paintInCenter && !AyuFeatures::MessageShot::isTakingShot()) {
 		const auto radialRevealed = 1.;
 		const auto opacity = (item->isSending() || _data->uploading())
 			? 1.
@@ -2038,6 +1846,12 @@ void Gif::hideSpoilers() {
 	}
 }
 
+void Gif::revealSpoilers() {
+	if (_spoiler) {
+		_spoiler->revealed = true;
+	}
+}
+
 bool Gif::needsBubble() const {
 	if (_storyId) {
 		return true;
@@ -2071,7 +1885,7 @@ QRect Gif::contentRectForReactions() const {
 	const auto via = item->Get<HistoryMessageVia>();
 	const auto reply = _parent->Get<Reply>();
 	const auto forwarded = item->Get<HistoryMessageForwarded>();
-	if (via || reply || forwarded || !_ephemeral.text.isEmpty()) {
+	if (via || reply || forwarded) {
 		usew = maxWidth() - additionalWidth(reply, via, forwarded);
 	}
 	accumulate_max(usew, _parent->reactionsOptimalWidth());
@@ -2164,11 +1978,8 @@ void Gif::validateGroupedCache(
 				&& thumb->height() < kUseNonBlurredThreshold));
 
 	const auto loadLevel = good ? 3 : thumb ? 2 : image ? 1 : 0;
-	const auto scaled = ScaledInstantViewMediaSize(
-		geometry.size(),
-		HostedInstantViewMediaPixelScale(_parent));
-	const auto width = scaled.width();
-	const auto height = scaled.height();
+	const auto width = geometry.width();
+	const auto height = geometry.height();
 	const auto options = (blur ? Option::Blur : Option(0));
 	const auto key = (uint64(width) << 48)
 		| (uint64(height) << 32)
@@ -2188,12 +1999,12 @@ void Gif::validateGroupedCache(
 	const auto ratio = style::DevicePixelRatio();
 
 	*cacheKey = key;
-	auto prepared = Images::Prepare(
+	auto scaled = Images::Prepare(
 		(image ? image : Image::BlankMedia().get())->original(),
 		pixSize * ratio,
 		{ .options = options, .outer = { width, height } });
 	auto rounded = Images::Round(
-		std::move(prepared),
+		std::move(scaled),
 		MediaRoundingMask(rounding));
 	*cache = Ui::PixmapFromImage(std::move(rounded));
 }
@@ -2292,22 +2103,6 @@ bool Gif::enforceBubbleWidth() const {
 	return true;
 }
 
-int Gif::bubbleWidthLimit() const {
-	if (_ephemeral.text.isEmpty()
-		|| !_data->isVideoMessage()
-		|| !isUnwrapped()) {
-		return 0;
-	}
-	const auto item = _parent->data();
-	const auto via = item->Get<HistoryMessageVia>();
-	const auto reply = _parent->Get<Reply>();
-	const auto forwarded = item->Get<HistoryMessageForwarded>();
-	const auto content = maxWidth() - additionalWidth(reply, via, forwarded);
-	return content
-		+ st::msgReplyPadding.left()
-		+ EphemeralPlateMaxWidth(_ephemeral.text);
-}
-
 int Gif::additionalWidth(
 		const Reply *reply,
 		const HistoryMessageVia *via,
@@ -2321,45 +2116,7 @@ int Gif::additionalWidth(
 	if (reply) {
 		accumulate_max(result, st::msgReplyPadding.left() + reply->maxWidth());
 	}
-	if (!_ephemeral.text.isEmpty()) {
-		accumulate_max(
-			result,
-			st::msgReplyPadding.left()
-				+ EphemeralPlateMaxWidth(_ephemeral.text));
-	}
 	return result;
-}
-
-int Gif::surroundingHeight(
-		const Reply *reply,
-		const HistoryMessageVia *via,
-		const HistoryMessageForwarded *forwarded,
-		int rectw) const {
-	const auto innerw = rectw
-		- (st::msgReplyPadding.left() + st::msgReplyPadding.right());
-	auto recth = 0;
-	const auto forwardedHeightReal = forwarded
-		? forwarded->text.countHeight(innerw)
-		: 0;
-	const auto forwardedHeight = qMin(
-		forwardedHeightReal,
-		kMaxGifForwardedBarLines * st::msgServiceNameFont->height);
-	if (forwarded) {
-		recth += st::msgReplyPadding.top() + forwardedHeight;
-	} else if (via) {
-		recth += st::msgReplyPadding.top()
-			+ st::msgServiceNameFont->height
-			+ (reply ? st::msgReplyPadding.top() : 0);
-	}
-	if (reply) {
-		const auto replyMargins = reply->margins();
-		recth += reply->height()
-			- ((forwarded || via) ? 0 : replyMargins.top())
-			- replyMargins.bottom();
-	} else {
-		recth += st::msgReplyPadding.bottom();
-	}
-	return recth;
 }
 
 ::Media::Streaming::Instance *Gif::activeRoundStreamed() const {
@@ -2425,8 +2182,7 @@ void Gif::playAnimation(bool autoplay) {
 }
 
 void Gif::createStreamedPlayer() {
-	const auto quality = _data->initialPlaybackVideoQuality(
-		Core::App().settings().videoQuality());
+	const auto quality = Core::App().settings().videoQuality();
 	const auto chosen = _data->chooseQuality(_realParent, quality);
 	if (_streamed && _streamed->chosen == chosen) {
 		return;
@@ -2452,17 +2208,14 @@ void Gif::createStreamedPlayer() {
 	}, _streamed->instance.lifetime());
 
 	_streamed->instance.switchQualityRequests(
-	) | rpl::on_next([=](int requested) {
-		if (quality.manual) {
-			return;
-		}
+	) | rpl::on_next([=](int quality) {
 		auto now = Core::App().settings().videoQuality();
-		if (now.manual || now.height == requested) {
+		if (now.manual || now.height == quality) {
 			return;
 		}
 		Core::App().settings().setVideoQuality({
 			.manual = 0,
-			.height = uint32(requested),
+			.height = uint32(quality),
 		});
 		Core::App().saveSettingsDelayed();
 		createStreamedPlayer();
@@ -2549,10 +2302,9 @@ void Gif::repaintStreamedContent() {
 }
 
 void Gif::streamingReady(::Media::Streaming::Information &&info) {
-	if (!ValidFrameSize(info.video.size, maxInlineArea())) {
-		if (!info.video.size.isEmpty()) {
-			_data->dimensions = info.video.size;
-		}
+	if (info.video.size.width() * info.video.size.height()
+		> kMaxInlineArea) {
+		_data->dimensions = info.video.size;
 		stopAnimation();
 	} else {
 		history()->owner().requestViewResize(_parent);
@@ -2608,14 +2360,22 @@ bool Gif::needInfoDisplay() const {
 }
 
 bool Gif::needCornerStatusDisplay() const {
+	if (AyuFeatures::MessageShot::ignoreRender(AyuFeatures::MessageShot::RenderPart::Date)) {
+		return false;
+	}
+
 	return _data->isVideoFile()
 		|| needInfoDisplay();
 }
 
 void Gif::ensureTranscribeButton() const {
-	const auto media = _parent->data()->media();
+	if (AyuFeatures::MessageShot::isTakingShot()) {
+		_transcribe = nullptr;
+		return;
+	}
+
 	if (_data->isVideoMessage()
-		&& (!media || !media->ttlSeconds())
+		&& !_parent->data()->media()->ttlSeconds()
 		&& !_parent->data()->isScheduled()
 		&& !_parent->data()->isAdminLogEntry()
 		&& (_data->session().premium()

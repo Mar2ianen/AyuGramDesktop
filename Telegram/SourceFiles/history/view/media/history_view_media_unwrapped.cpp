@@ -9,7 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "data/data_session.h"
 #include "history/history.h"
-#include "history/view/media/history_view_ephemeral_plate.h"
 #include "history/view/media/history_view_media_common.h"
 #include "history/view/media/history_view_sticker.h"
 #include "history/view/history_view_element.h"
@@ -22,6 +21,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/painter.h"
 #include "styles/style_chat.h"
+
+// AyuGram includes
+#include "ayu/features/message_shot/message_shot.h"
+
 
 namespace HistoryView {
 namespace {
@@ -62,7 +65,6 @@ QSize UnwrappedMedia::countOptimalSize() {
 		if (forwarded) {
 			forwarded->create(via, item);
 		}
-		refreshEphemeralText();
 		maxWidth += additionalWidth(topic, reply, via, forwarded);
 		accumulate_max(maxWidth, _parent->reactionsOptimalWidth());
 		if (const auto size = _parent->rightActionSize()) {
@@ -98,20 +100,10 @@ QSize UnwrappedMedia::countCurrentSize(int newWidth) {
 	const auto reply = _parent->Get<Reply>();
 	const auto topic = _parent->displayedTopicButton();
 	const auto forwarded = getDisplayedForwardedInfo();
-	refreshEphemeralText();
-	if (topic || via || reply || forwarded || !_ephemeralText.isEmpty()) {
+	if (topic || via || reply || forwarded) {
 		const auto additional = additionalWidth(topic, reply, via, forwarded);
 		const auto optimalw = maxWidth() - additional;
-		auto additionalMinWidth = std::min(
-			additional,
-			st::msgReplyPadding.left() + st::msgMinWidth / 2);
-		if (!_ephemeralText.isEmpty()) {
-			const auto plateWidth = st::msgReplyPadding.left()
-				+ EphemeralPlateMaxWidth(_ephemeralText);
-			accumulate_max(
-				additionalMinWidth,
-				std::min(additional, plateWidth));
-		}
+		const auto additionalMinWidth = std::min(additional, st::msgReplyPadding.left() + st::msgMinWidth / 2);
 		_additionalOnTop = (optimalw + additionalMinWidth) > newWidth;
 		const auto surroundingWidth = _additionalOnTop
 			? std::min(newWidth - st::msgReplyPadding.left(), additional)
@@ -181,17 +173,13 @@ void UnwrappedMedia::draw(Painter &p, const PaintContext &context) const {
 	}
 }
 
-void UnwrappedMedia::refreshEphemeralText() {
-	RefreshEphemeralPlate(_parent, _ephemeralText);
-}
-
 UnwrappedMedia::SurroundingInfo UnwrappedMedia::surroundingInfo(
 		const TopicButton *topic,
 		const Reply *reply,
 		const HistoryMessageVia *via,
 		const HistoryMessageForwarded *forwarded,
 		int outerw) const {
-	if (!topic && !via && !reply && !forwarded && _ephemeralText.isEmpty()) {
+	if (!topic && !via && !reply && !forwarded) {
 		return {};
 	}
 	const auto innerw = outerw - st::msgReplyPadding.left() - st::msgReplyPadding.right();
@@ -237,20 +225,11 @@ UnwrappedMedia::SurroundingInfo UnwrappedMedia::surroundingInfo(
 	} else if (panelHeight) {
 		panelHeight += st::msgReplyPadding.bottom();
 	}
-	const auto ephemeralSize = EphemeralPlateSize(_ephemeralText, outerw);
-	const auto rest = (topic || via || reply || forwarded)
-		? ((topicSize.isEmpty() ? 0 : topicSize.height())
-			+ ((panelHeight || !topicSize.height()) ? st::topicButtonSkip : 0)
-			+ panelHeight)
-		: 0;
-	const auto total = ephemeralSize.isEmpty()
-		? rest
-		: (ephemeralSize.height()
-			+ (rest ? st::topicButtonSkip : 0)
-			+ rest);
+	const auto total = (topicSize.isEmpty() ? 0 : topicSize.height())
+		+ ((panelHeight || !topicSize.height()) ? st::topicButtonSkip : 0)
+		+ panelHeight;
 	return {
 		.topicSize = topicSize,
-		.ephemeralSize = ephemeralSize,
 		.height = total,
 		.panelHeight = panelHeight,
 		.forwardedHeight = forwardedHeight,
@@ -272,7 +251,7 @@ void UnwrappedMedia::drawSurrounding(
 	const auto rightActionSize = _parent->rightActionSize();
 	const auto fullRight = calculateFullRight(inner);
 	auto fullBottom = height();
-	if (needInfoDisplay()) {
+	if (needInfoDisplay() && !AyuFeatures::MessageShot::ignoreRender(AyuFeatures::MessageShot::RenderPart::Date)) {
 		_parent->drawInfo(
 			p,
 			context,
@@ -288,35 +267,12 @@ void UnwrappedMedia::drawSurrounding(
 		: (width() - inner.width() - st::msgReplyPadding.left());
 	if (const auto surrounding = surroundingInfo(topic, reply, via, forwarded, rectw)) {
 		auto recth = surrounding.panelHeight;
-		if (!surrounding.ephemeralSize.isEmpty()) {
-			const auto rectw = surrounding.ephemeralSize.width();
-			int rectx = _additionalOnTop
-				? (rightAligned ? (inner.x() + inner.width() - rectw) : 0)
-				: (rightAligned
-					? 0
-					: (inner.width() + st::msgReplyPadding.left()));
-			if (rtl()) {
-				rectx = width() - rectx - rectw;
-			}
-			PaintEphemeralPlate(
-				p,
-				context,
-				_ephemeralText,
-				rectx,
-				0,
-				rectw,
-				width());
-		}
 		if (!surrounding.topicSize.isEmpty()) {
 			auto rectw = surrounding.topicSize.width();
 			int rectx = _additionalOnTop
 				? (rightAligned ? (inner.x() + inner.width() - rectw) : 0)
-				: (rightAligned
-					? 0
-					: (inner.width() + st::msgReplyPadding.left()));
-			int recty = surrounding.ephemeralSize.isEmpty()
-				? 0
-				: (surrounding.ephemeralSize.height() + st::topicButtonSkip);
+				: (rightAligned ? 0 : (inner.width() + st::msgReplyPadding.left()));
+			int recty = 0;
 			if (rtl()) rectx = width() - rectx - rectw;
 
 			{
@@ -349,9 +305,7 @@ void UnwrappedMedia::drawSurrounding(
 		if (recth) {
 			int rectx = _additionalOnTop
 				? (rightAligned ? (inner.x() + inner.width() - rectw) : 0)
-				: (rightAligned
-					? 0
-					: (inner.width() + st::msgReplyPadding.left()));
+				: (rightAligned ? 0 : (inner.width() + st::msgReplyPadding.left()));
 			int recty = surrounding.height - recth;
 			if (rtl()) rectx = width() - rectx - rectw;
 
@@ -389,7 +343,7 @@ void UnwrappedMedia::drawSurrounding(
 			replyRight = rectx + rectw;
 		}
 	}
-	if (rightActionSize) {
+	if (rightActionSize && !AyuFeatures::MessageShot::isTakingShot()) {
 		const auto position = calculateFastActionPosition(
 			inner,
 			rightAligned,
@@ -474,40 +428,12 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			: (width() - inner.width() - st::msgReplyPadding.left());
 		if (const auto surrounding = surroundingInfo(topic, reply, via, forwarded, rectw)) {
 			auto recth = surrounding.panelHeight;
-			if (!surrounding.ephemeralSize.isEmpty()) {
-				const auto rectw = surrounding.ephemeralSize.width();
-				int rectx = _additionalOnTop
-					? (rightAligned ? (inner.x() + inner.width() - rectw) : 0)
-					: (rightAligned
-						? 0
-						: (inner.width() + st::msgReplyPadding.left()));
-				if (rtl()) {
-					rectx = width() - rectx - rectw;
-				}
-				if (EphemeralPlateState(
-						_parent,
-						_ephemeralText,
-						point,
-						rectx,
-						0,
-						rectw,
-						surrounding.ephemeralSize.height(),
-						request,
-						result)) {
-					return result;
-				}
-			}
 			if (!surrounding.topicSize.isEmpty()) {
 				auto rectw = surrounding.topicSize.width();
 				int rectx = _additionalOnTop
 					? (rightAligned ? (inner.x() + inner.width() - rectw) : 0)
-					: (rightAligned
-						? 0
-						: (inner.width() + st::msgReplyPadding.left()));
-				int recty = surrounding.ephemeralSize.isEmpty()
-					? 0
-					: (surrounding.ephemeralSize.height()
-						+ st::topicButtonSkip);
+					: (rightAligned ? 0 : (inner.width() + st::msgReplyPadding.left()));
+				int recty = 0;
 				if (rtl()) rectx = width() - rectx - rectw;
 				if (QRect(QPoint(rectx, recty), surrounding.topicSize).contains(point)) {
 					result.link = topic->link;
@@ -517,9 +443,7 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			if (recth) {
 				int rectx = _additionalOnTop
 					? (rightAligned ? (inner.x() + inner.width() - rectw) : 0)
-					: (rightAligned
-						? 0
-						: (inner.width() + st::msgReplyPadding.left()));
+					: (rightAligned ? 0 : (inner.width() + st::msgReplyPadding.left()));
 				int recty = surrounding.height - recth;
 				if (rtl()) rectx = width() - rectx - rectw;
 
@@ -748,12 +672,6 @@ int UnwrappedMedia::additionalWidth(
 	}
 	if (reply) {
 		accumulate_max(result, st::msgReplyPadding.left() + reply->maxWidth());
-	}
-	if (!_ephemeralText.isEmpty()) {
-		accumulate_max(
-			result,
-			st::msgReplyPadding.left()
-				+ EphemeralPlateMaxWidth(_ephemeralText));
 	}
 	return result;
 }

@@ -48,11 +48,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "webrtc/webrtc_video_track.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
-#include "styles/style_history_view_voice_record_bar.h"
 #include "styles/style_layers.h"
 #include "styles/style_media_player.h"
 
 #include <tgcalls/VideoCaptureInterface.h>
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "boxes/abstract_box.h"
+
 
 namespace HistoryView::Controls {
 namespace {
@@ -3031,17 +3035,38 @@ void VoiceRecordBar::stopRecording(StopType type, bool ttlBeforeHide) {
 
 			window()->raise();
 			window()->activateWindow();
-			const auto options = Api::SendOptions{
+			auto options = Api::SendOptions{
 				.ttlSeconds = (ttlBeforeHide
 					? std::numeric_limits<int>::max()
 					: 0),
 			};
-			_sendVoiceRequests.fire({
-				.bytes = _data.content,
-				.waveform = _data.waveform,
-				.duration = _data.duration,
-				.options = options,
-			});
+
+			auto sendVoiceCallback = crl::guard(
+				this,
+				[=, this](Fn<void()> &&close)
+				{
+					_sendVoiceRequests.fire({
+						.bytes = _data.content,
+						.waveform = _data.waveform,
+						.duration = _data.duration,
+						.options = options,
+					});
+					close();
+				});
+
+			const auto &settings = AyuSettings::getInstance();
+			if (settings.voiceConfirmation()) {
+				_show->showBox(Ui::MakeConfirmBox(
+					{
+						.text = tr::ayu_ConfirmationVoice(),
+						.confirmed = std::move(sendVoiceCallback),
+						.confirmText = tr::lng_send_button()
+					}));
+			} else {
+				sendVoiceCallback([]
+				{
+				});
+			}
 		}));
 	}
 }
@@ -3107,13 +3132,34 @@ void VoiceRecordBar::requestToSendWithOptions(Api::SendOptions options) {
 			_listen->prepareForSendAnimation();
 			_listen->applyTrimBeforeSend();
 		}
-		_sendVoiceRequests.fire({
-			.bytes = _data.content,
-			.waveform = _data.waveform,
-			.duration = _data.duration,
-			.options = options,
-			.video = !_data.minithumbs.isNull(),
-		});
+
+		const auto &settings = AyuSettings::getInstance();
+		auto sendVoiceCallback = crl::guard(
+			this,
+			[=, this](Fn<void()> &&close)
+			{
+				_sendVoiceRequests.fire({
+					.bytes = _data.content,
+					.waveform = _data.waveform,
+					.duration = _data.duration,
+					.options = options,
+					.video = !_data.minithumbs.isNull(),
+				});
+				close();
+			});
+
+		if (settings.voiceConfirmation()) {
+			_show->showBox(Ui::MakeConfirmBox(
+				{
+					.text = tr::ayu_ConfirmationVoice(),
+					.confirmed = std::move(sendVoiceCallback),
+					.confirmText = tr::lng_send_button()
+				}));
+		} else {
+			sendVoiceCallback([]
+			{
+			});
+		}
 	}
 }
 

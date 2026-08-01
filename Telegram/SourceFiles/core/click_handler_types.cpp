@@ -45,6 +45,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QDateTime>
 #include <QtCore/QLocale>
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+
 namespace {
 
 constexpr auto kReminderSetToastDuration = 4 * crl::time(1000);
@@ -72,24 +75,6 @@ constexpr auto kReminderSetToastDuration = 4 * crl::time(1000);
 		}
 	}
 	return result;
-}
-
-[[nodiscard]] bool IsTelegramShortLinkHost(const QUrl &url) {
-	using namespace qthelp;
-
-	return regex_match(
-		"(^|\\.)(telegram\\.(me|dog)|t\\.me)$",
-		url.host(),
-		RegExOption::CaseInsensitive).valid();
-}
-
-[[nodiscard]] bool HiddenUrlRequiresConfirmation(const QUrl &url) {
-	return UrlRequiresConfirmation(url) || IsTelegramShortLinkHost(url);
-}
-
-[[nodiscard]] bool RequiresConfirmationAfterIvFallback(const QUrl &url) {
-	const auto host = url.host().toLower();
-	return (host == u"telegra.ph"_q) || (host == u"te.legra.ph"_q);
 }
 
 // Possible context owners: media viewer, profile, history widget.
@@ -232,30 +217,17 @@ bool UrlRequiresConfirmation(const QUrl &url) {
 }
 
 QString HiddenUrlClickHandler::copyToClipboardText() const {
-	const auto original = originalUrl();
-	const auto originalExternal = UrlClickHandler::ExternalUrlFromInternalUrl(
-		original);
-	if (!originalExternal.isEmpty()) {
-		return originalExternal;
-	}
-	const auto value = url();
-	const auto external = UrlClickHandler::ExternalUrlFromInternalUrl(value);
-	return external.isEmpty() ? value : external;
+	return url().startsWith(u"internal:url:"_q)
+		? url().mid(u"internal:url:"_q.size())
+		: url();
 }
 
 QString HiddenUrlClickHandler::copyToClipboardContextItemText() const {
-	const auto original = originalUrl();
-	const auto originalExternal = UrlClickHandler::ExternalUrlFromInternalUrl(
-		original);
-	const auto value = originalExternal.isEmpty() ? url() : original;
-	const auto external = originalExternal.isEmpty()
-		? UrlClickHandler::ExternalUrlFromInternalUrl(value)
-		: originalExternal;
-	return value.isEmpty()
+	return url().isEmpty()
 		? QString()
-		: !value.startsWith(u"internal:"_q)
+		: !url().startsWith(u"internal:"_q)
 		? UrlClickHandler::copyToClipboardContextItemText()
-		: !external.isEmpty()
+		: url().startsWith(u"internal:url:"_q)
 		? UrlClickHandler::copyToClipboardContextItemText()
 		: QString();
 }
@@ -266,15 +238,14 @@ QString HiddenUrlClickHandler::dragText() const {
 }
 
 void HiddenUrlClickHandler::Open(QString url, QVariant context) {
-	if (const auto external = UrlClickHandler::ExternalUrlFromInternalUrl(url);
-			!external.isEmpty()) {
-		url = external;
-	}
 	url = Core::TryConvertUrlToLocal(url);
 	if (Core::InternalPassportOrOAuthLink(url)) {
 		return;
 	}
 
+	const auto open = [=] {
+		UrlClickHandler::Open(url, context);
+	};
 	if (url.startsWith(u"tg://"_q, Qt::CaseInsensitive)
 		|| url.startsWith(u"internal:"_q, Qt::CaseInsensitive)) {
 		UrlClickHandler::Open(url, QVariant::fromValue([&] {
@@ -286,31 +257,8 @@ void HiddenUrlClickHandler::Open(QString url, QVariant context) {
 		const auto parsedUrl = url.startsWith(u"tonsite://"_q)
 			? QUrl(url)
 			: QUrl::fromUserInput(url);
-		auto my = context.value<ClickHandlerContext>();
-		auto openContext = context;
-		const auto forceConfirmation = my.forceExternalUrlConfirmation
-			&& my.ignoreIv;
-		const auto skipConfirmation = base::IsCtrlPressed();
-		if (forceConfirmation) {
-			my.forceExternalUrlConfirmation = false;
-			openContext = QVariant::fromValue(my);
-		}
-		const auto confirmAfterIvFallback
-			= RequiresConfirmationAfterIvFallback(parsedUrl)
-			&& !my.ignoreIv
-			&& !skipConfirmation;
-		const auto canTryIv = (my.sessionWindow.get() != nullptr);
-		if (confirmAfterIvFallback && canTryIv) {
-			my.forceExternalUrlConfirmation = true;
-			openContext = QVariant::fromValue(my);
-		}
-		const auto open = [=] {
-			UrlClickHandler::Open(url, openContext);
-		};
-		if (forceConfirmation
-			|| (confirmAfterIvFallback && !canTryIv)
-			|| (HiddenUrlRequiresConfirmation(parsedUrl)
-				&& !skipConfirmation)) {
+		if (!AyuSettings::getInstance().disableOpenLinkWarning() && UrlRequiresConfirmation(parsedUrl) && !base::IsCtrlPressed()) {
+			const auto my = context.value<ClickHandlerContext>();
 			if (!my.show) {
 				Core::App().hideMediaView();
 			}
@@ -412,7 +360,6 @@ void BotGameUrlClickHandler::onClick(ClickContext context) const {
 	const auto openGame = [=] {
 		bot->session().attachWebView().open({
 			.bot = bot,
-			.context = { .controller = weakController },
 			.button = {.url = url.toUtf8() },
 			.source = InlineBots::WebViewSourceGame{
 				.messageId = itemId,
@@ -444,13 +391,7 @@ void BotGameUrlClickHandler::onClick(ClickContext context) const {
 }
 
 auto HiddenUrlClickHandler::getTextEntity() const -> TextEntity {
-	const auto original = originalUrl();
-	return {
-		EntityType::CustomUrl,
-		UrlClickHandler::ExternalUrlFromInternalUrl(original).isEmpty()
-			? url()
-			: original
-	};
+	return { EntityType::CustomUrl, url() };
 }
 
 QString MentionClickHandler::copyToClipboardContextItemText() const {
@@ -590,11 +531,7 @@ void MonospaceClickHandler::onClick(ClickContext context) const {
 	}
 	const auto my = context.other.value<ClickHandlerContext>();
 	if (const auto controller = my.sessionWindow.get()) {
-		controller->showToast({
-			.text = { tr::lng_text_copied(tr::now) },
-			.iconLottie = u"toast/copy"_q,
-			.iconLottieSize = st::toastLottieIconSize,
-		});
+		controller->showToast(tr::lng_text_copied(tr::now));
 	}
 	TextUtilities::SetClipboardText(TextForMimeData::Simple(_text.trimmed()));
 }
@@ -637,11 +574,7 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 				base::unixtime::parse(date),
 				QLocale::LongFormat);
 			TextUtilities::SetClipboardText(TextForMimeData::Simple(text));
-			show->showToast({
-				.text = { tr::lng_date_copied(tr::now) },
-				.iconLottie = u"toast/copy"_q,
-				.iconLottieSize = st::toastLottieIconSize,
-			});
+			show->showToast(tr::lng_date_copied(tr::now));
 		},
 		&st::menuIconCopy);
 
@@ -661,7 +594,7 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 	if (canForward) {
 		menu->addAction(
 			tr::lng_context_set_reminder(tr::now),
-			[date, itemId, show] {
+			[itemId, show] {
 				const auto session = &show->session();
 				const auto item = session->data().message(itemId);
 				if (!item) {
@@ -669,10 +602,6 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 				}
 				const auto self = session->user();
 				const auto history = self->owner().history(self);
-				const auto now = base::unixtime::now();
-				const auto scheduleTime = (date > now + 60)
-					? date
-					: HistoryView::DefaultScheduleTime();
 				show->showBox(HistoryView::PrepareScheduleBox(
 					session,
 					show,
@@ -687,9 +616,7 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
 							},
 							action,
 							[=] { DoneSetReminder(show); });
-					},
-					Api::SendOptions(),
-					scheduleTime));
+					}));
 			},
 			&st::menuIconNotifications);
 	}

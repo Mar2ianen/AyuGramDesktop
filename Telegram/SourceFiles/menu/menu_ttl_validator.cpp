@@ -21,12 +21,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
 #include "ui/text/format_values.h"
+#include "styles/style_chat.h"
 #include "styles/style_menu_icons.h"
 
 namespace TTLMenu {
 namespace {
 
-constexpr auto kToastDuration = crl::time(3500);
+constexpr auto kToastDuration = crl::time(3000);
 
 void ShowAutoDeleteToast(
 		std::shared_ptr<Ui::Show> show,

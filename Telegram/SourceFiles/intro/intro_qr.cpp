@@ -9,7 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "boxes/abstract_box.h"
 #include "data/components/passkeys.h"
-#include "data/data_passkey_deserialize.h"
 #include "intro/intro_phone.h"
 #include "intro/intro_widget.h"
 #include "intro/intro_password_check.h"
@@ -32,6 +31,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "qr/qr_generate.h"
 #include "platform/platform_webauthn.h"
 #include "styles/style_intro.h"
+
+// AyuGram includes
+#include "main/main_domain.h"
+
 
 namespace Intro {
 namespace details {
@@ -63,8 +66,7 @@ namespace {
 
 [[nodiscard]] not_null<Ui::RpWidget*> PrepareQrWidget(
 		not_null<QWidget*> parent,
-		rpl::producer<QByteArray> codes,
-		rpl::producer<bool> active) {
+		rpl::producer<QByteArray> codes) {
 	struct State {
 		explicit State(Fn<void()> callback)
 		: waiting(callback, st::defaultInfiniteRadialAnimation) {
@@ -124,19 +126,6 @@ namespace {
 		return TelegramLogoImage();
 	}) | rpl::on_next([=](QImage &&image) {
 		state->center = std::move(image);
-	}, result->lifetime());
-	std::move(
-		active
-	) | rpl::on_next([=](bool active) {
-		if (active) {
-			state->previous = QImage();
-			state->qr = QImage();
-			state->shown.stop();
-			state->waiting.start();
-		} else {
-			state->waiting.stop(anim::type::instant);
-		}
-		result->update();
 	}, result->lifetime());
 	result->paintRequest(
 	) | rpl::on_next([=](QRect clip) {
@@ -282,18 +271,19 @@ void QrWidget::checkForTokenUpdate(const MTPUpdate &update) {
 }
 
 void QrWidget::submit() {
-	goNextOrBack<PhoneWidget>();
+	goReplace<PhoneWidget>(Animate::Forward);
 }
 
 rpl::producer<QString> QrWidget::nextButtonText() const {
 	return rpl::single(QString());
 }
 
+bool QrWidget::hasBack() const {
+	return Core::App().domain().maybeLastOrSomeAuthedAccount();
+}
+
 void QrWidget::setupControls() {
-	const auto code = PrepareQrWidget(
-		this,
-		_qrCodes.events(),
-		_qrActive.events());
+	const auto code = PrepareQrWidget(this, _qrCodes.events());
 	rpl::combine(
 		sizeValue(),
 		code->widthValue()
@@ -394,10 +384,10 @@ void QrWidget::setupPasskeyLink() {
 	}, _passkey->lifetime());
 
 	_passkey->setClickedCallback([=] {
-		const auto attempt = [=](
-				const ::Data::Passkey::LoginData &loginData) {
-			const auto initialDc = _passkeyLoginDc;
-			Platform::WebAuthn::Login(loginData, crl::guard(this, [=](
+		const auto initialDc = api().instance().mainDcId();
+		::Data::InitPasskeyLogin(api(), [=](
+			const ::Data::Passkey::LoginData &loginData) {
+			Platform::WebAuthn::Login(loginData, [=](
 					Platform::WebAuthn::LoginResult result) {
 				if (result.userHandle.isEmpty()) {
 					using Error = Platform::WebAuthn::Error;
@@ -413,35 +403,19 @@ void QrWidget::setupPasskeyLink() {
 					result,
 					[=](const MTPauth_Authorization &auth) { done(auth); },
 					[=](QString error) {
-						_passkeyLoginData = std::nullopt;
 						if (error == u"SESSION_PASSWORD_NEEDED"_q) {
 							sendCheckPasswordRequest();
 						} else {
 							showError(rpl::single(error));
 						}
 					});
-			}));
-		};
-		if (_passkeyLoginData
-			&& (crl::now() - _passkeyLoginTime
-				< crl::time(_passkeyLoginData->timeout))) {
-			attempt(*_passkeyLoginData);
-		} else {
-			_passkeyLoginData = std::nullopt;
-			const auto initedDc = api().instance().mainDcId();
-			::Data::InitPasskeyLogin(api(), [=](
-				const ::Data::Passkey::LoginData &loginData) {
-				_passkeyLoginData = loginData;
-				_passkeyLoginTime = crl::now();
-				_passkeyLoginDc = initedDc;
-				attempt(loginData);
 			});
-		}
+		});
 	});
 }
 
 void QrWidget::refreshCode() {
-	if (_requestId || _stopped) {
+	if (_requestId) {
 		return;
 	}
 	_requestId = api().request(MTPauth_ExportLoginToken(
@@ -538,10 +512,6 @@ void QrWidget::activate() {
 	Step::activate();
 	showChildren();
 
-	if (base::take(_stopped)) {
-		_qrActive.fire(true);
-		refreshCode();
-	}
 	if (_skip) {
 		_skip->setFocus(Qt::OtherFocusReason);
 	}
@@ -549,10 +519,6 @@ void QrWidget::activate() {
 
 void QrWidget::finished() {
 	Step::finished();
-	_stopped = true;
-	_forceRefresh = false;
-	_qrActive.fire(false);
-	hideError();
 	_refreshTimer.cancel();
 	apiClear();
 	cancelled();

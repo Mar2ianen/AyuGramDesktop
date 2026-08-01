@@ -20,6 +20,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "styles/style_dialogs.h"
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/features/filters/filters_controller.h"
+
+
 namespace HistoryView {
 namespace {
 
@@ -60,6 +65,10 @@ bool SendActionPainter::updateNeedsAnimating(
 	using Type = Api::SendProgressType;
 	if (action.type() == mtpc_sendMessageCancelAction) {
 		clear(user);
+		return false;
+	}
+
+	if (FiltersController::isBlocked(user)) {
 		return false;
 	}
 
@@ -132,10 +141,8 @@ bool SendActionPainter::updateNeedsAnimating(
 	}, [&](const MTPDsendMessageEmojiInteractionSeen &) {
 		// #TODO interaction
 	}, [&](const MTPDsendMessageTextDraftAction &) {
-	}, [&](const MTPDsendMessageRichMessageDraftAction &) {
 	}, [&](const MTPDsendMessageCancelAction &) {
 		Unexpected("CancelAction here.");
-	}, [&](const auto &) {
 	});
 	return updateNeedsAnimating(now, true);
 }
@@ -389,10 +396,17 @@ bool SendActionPainter::updateNeedsAnimating(crl::time now, bool force) {
 	if (force
 		|| sendActionChanged
 		|| (sendActionResult && !anim::Disabled())) {
+		const auto left = 0;
+		const auto top = Ui::Emoji::GetCustomSkipNormal();
 		const auto width = _sendActionAnimation.width() + _animationLeft;
+		const auto height = std::max({
+			st::normalFont->height - top,
+			st::dialogsMiniPreviewTop + st::dialogsMiniPreview - top,
+			Ui::Emoji::GetCustomSizeNormal(),
+		});
 		_history->peer->owner().sendActionManager().updateAnimation({
 			_topic ? ((Data::Thread*)_topic) : _history,
-			{ 0, 0, width, st::normalFont->height },
+			{ left, top, width, height },
 			(force || sendActionChanged)
 		});
 	}

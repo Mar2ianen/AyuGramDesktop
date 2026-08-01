@@ -12,7 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_cursor_state.h"
-#include "history/view/history_view_message.h"
 #include "data/data_document.h"
 #include "data/data_media_types.h"
 #include "data/data_session.h"
@@ -28,12 +27,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "layout/layout_selection.h"
 #include "styles/style_chat.h"
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/features/message_shot/message_shot.h"
+
+
 namespace HistoryView {
 namespace {
-
-[[nodiscard]] bool IsHostedInstantViewMedia(not_null<const Element*> parent) {
-	return parent->Get<InstantViewMediaRuntime>() != nullptr;
-}
 
 std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		const std::vector<QSize> &sizes) {
@@ -151,13 +151,6 @@ QSize GroupedMedia::countOptimalSize() {
 			media->initDimensions();
 			accumulate_max(maxWidth, media->maxWidth());
 		}
-		auto index = 0;
-		for (const auto &part : _parts) {
-			const auto last = (++index == _parts.size());
-			accumulate_max(
-				maxWidth,
-				part.content->widenGroupingMaxWidth(maxWidth, last));
-		}
 	}
 	auto index = 0;
 	for (const auto &part : _parts) {
@@ -205,11 +198,7 @@ QSize GroupedMedia::countOptimalSize() {
 }
 
 QSize GroupedMedia::countCurrentSize(int newWidth) {
-	const auto hostedInstantView = (_mode == Mode::Grid)
-		&& IsHostedInstantViewMedia(_parent);
-	if (!hostedInstantView) {
-		accumulate_min(newWidth, maxWidth());
-	}
+	accumulate_min(newWidth, maxWidth());
 	auto newHeight = 0;
 	if (_mode == Mode::Grid && newWidth < st::historyGroupWidthMin) {
 		return { newWidth, newHeight };
@@ -326,16 +315,6 @@ QRect GroupedMedia::groupItemRect(int index) const {
 	return {};
 }
 
-Media *GroupedMedia::partMediaAt(QPoint point) const {
-	point -= QPoint(0, groupedPadding().top());
-	for (const auto &part : _parts) {
-		if (part.geometry.contains(point)) {
-			return part.content.get();
-		}
-	}
-	return nullptr;
-}
-
 Media *GroupedMedia::lookupSpoilerTagMedia() const {
 	if (_parts.empty()) {
 		return nullptr;
@@ -426,21 +405,41 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	auto nowCache = false;
 	const auto groupPadding = groupedPadding();
 	auto selection = context.selection;
-	const auto fullSelection = context.selected();
+	const auto fullSelection = (selection == FullSelection);
 	const auto textSelection = (_mode == Mode::Column)
 		&& !fullSelection
 		&& !IsSubGroupSelection(selection);
 	const auto inWebPage = (_parent->media() != this);
 	constexpr auto kSmall = Ui::BubbleCornerRounding::Small;
-	const auto rounding = IsHostedInstantViewMedia(_parent)
-		? Ui::BubbleRounding()
-		: inWebPage
+	const auto rounding = inWebPage
 		? Ui::BubbleRounding{ kSmall, kSmall, kSmall, kSmall }
 		: adjustedBubbleRounding();
 	auto highlight = context.highlight.range;
 	const auto tagged = lookupSpoilerTagMedia();
 	auto fullRect = QRect();
 	const auto subpartHighlight = IsSubGroupSelection(highlight);
+
+	auto anyDeleted = false;
+	const auto &settings = AyuSettings::getInstance();
+	const auto perItemOpacityEnabled = settings.semiTransparentDeletedMessages();
+	if (!perItemOpacityEnabled) {
+		for (const auto &part : _parts) {
+			part.deletedAnimation.stop();
+		}
+	}
+	if (perItemOpacityEnabled) {
+		for (const auto &part : _parts) {
+			if (part.item->isDeleted()) {
+				anyDeleted = true;
+			}
+		}
+	}
+	const auto perItemDeletedOpacity = perItemOpacityEnabled
+		&& anyDeleted;
+	const auto elementDeletedOpacity = perItemDeletedOpacity
+		? _parent->deletedOpacity()
+		: 1.;
+
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		auto partContext = context.withSelection(fullSelection
@@ -467,15 +466,50 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
-		part.content->drawGrouped(
-			p,
-			partContext,
-			part.geometry.translated(0, groupPadding.top()),
-			part.sides,
-			applyRoundingSides(rounding, part.sides),
-			highlightOpacity,
-			&part.cacheKey,
-			&part.cache);
+		if (perItemDeletedOpacity && part.item->isDeleted()) {
+			if (part.item->wasDeletedAnimated()
+				&& !part.deletedAnimation.animating()) {
+				part.deletedAnimation.start(
+					[parent = _parent] {
+						if (!AyuSettings::getInstance().semiTransparentDeletedMessages()) {
+							return false;
+						}
+						parent->repaint();
+						return true;
+					},
+					1.,
+					0.7,
+					500,
+					anim::easeOutCubic);
+				part.item->markDeletedAnimated();
+			}
+			const auto itemOpacity = part.deletedAnimation.value(0.7);
+			const auto adjustedOpacity = (elementDeletedOpacity > 0.)
+				? (itemOpacity / elementDeletedOpacity)
+				: 0.;
+			const auto savedOp = p.opacity();
+			p.setOpacity(savedOp * adjustedOpacity);
+			part.content->drawGrouped(
+				p,
+				partContext,
+				part.geometry.translated(0, groupPadding.top()),
+				part.sides,
+				applyRoundingSides(rounding, part.sides),
+				highlightOpacity,
+				&part.cacheKey,
+				&part.cache);
+			p.setOpacity(savedOp);
+		} else {
+			part.content->drawGrouped(
+				p,
+				partContext,
+				part.geometry.translated(0, groupPadding.top()),
+				part.sides,
+				applyRoundingSides(rounding, part.sides),
+				highlightOpacity,
+				&part.cacheKey,
+				&part.cache);
+		}
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
@@ -499,7 +533,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = width();
 		auto fullBottom = height();
-		if (needInfoDisplay()) {
+		if (needInfoDisplay() && !AyuFeatures::MessageShot::ignoreRender(AyuFeatures::MessageShot::RenderPart::Date)) {
 			_parent->drawInfo(
 				p,
 				context,
@@ -529,7 +563,7 @@ TextState GroupedMedia::getPartState(
 				part.sides,
 				point,
 				request);
-			AddTextStateOffset(&result, uint16(shift));
+			result.symbol += shift;
 			result.itemId = part.item->fullId();
 			return result;
 		}
@@ -787,6 +821,10 @@ bool GroupedMedia::applyGroup(const DataMediaRange &medias) {
 
 	auto modeChosen = false;
 	for (const auto media : medias) {
+		if (!media) {
+			continue; // AyuGram: fix ebe44780-7c8b-4964-ba31-b747c947254f
+		}
+
 		const auto mediaMode = DetectMode(media);
 		if (!modeChosen) {
 			_mode = mediaMode;
@@ -827,6 +865,12 @@ not_null<Media*> GroupedMedia::main() const {
 void GroupedMedia::hideSpoilers() {
 	for (const auto &part : _parts) {
 		part.content->hideSpoilers();
+	}
+}
+
+void GroupedMedia::revealSpoilers() {
+	for (const auto &part : _parts) {
+		part.content->revealSpoilers();
 	}
 }
 
@@ -921,19 +965,6 @@ bool GroupedMedia::enforceBubbleWidth() const {
 	return _mode == Mode::Grid;
 }
 
-int GroupedMedia::contributedMaxMonospaceWidth() const {
-	if (_mode != Mode::Column) {
-		return 0;
-	}
-	auto result = 0;
-	for (const auto &part : _parts) {
-		accumulate_max(
-			result,
-			part.content->contributedMaxMonospaceWidth());
-	}
-	return result;
-}
-
 bool GroupedMedia::computeNeedBubble() const {
 	Expects(_mode == Mode::Column || _captionItem.has_value());
 
@@ -956,6 +987,9 @@ bool GroupedMedia::computeNeedBubble() const {
 }
 
 bool GroupedMedia::needInfoDisplay() const {
+	if (AyuFeatures::MessageShot::isTakingShot()) {
+		return (_mode != Mode::Column);
+	}
 	const auto item = _parent->data();
 	return (_mode != Mode::Column)
 		&& (item->isSending()

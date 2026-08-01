@@ -40,6 +40,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_chat.h"
 
+// AyuGram includes
+#include "ayu/ui/context_menu/context_menu.h"
+#include "ayu/ayu_settings.h"
+
+
 namespace HistoryView::Reactions {
 namespace {
 
@@ -182,14 +187,14 @@ UnifiedFactoryOwner::RecentFactory UnifiedFactoryOwner::factory() {
 			&& !i->second.custom();
 		const auto manager = &_session->data().customEmojiManager();
 		auto result = isDefaultReaction
-			? MakeWrappedEmoji<Ui::Text::ShiftedEmoji>(
+			? std::make_unique<Ui::Text::ShiftedEmoji>(
 				manager->create(id, std::move(repaint), tag, sizeOverride),
 				_defaultReactionShift)
 			: manager->create(id, std::move(repaint), tag);
 		const auto j = _defaultReactionInStripMap.find(id);
 		if (j != end(_defaultReactionInStripMap)) {
 			Assert(_strip != nullptr);
-			return MakeWrappedEmoji<StripEmoji>(
+			return std::make_unique<StripEmoji>(
 				std::move(result),
 				_strip,
 				-_stripPaintOneShift,
@@ -208,8 +213,7 @@ Selector::Selector(
 	Fn<void(bool fast)> close,
 	IconFactory iconFactory,
 	Fn<bool()> paused,
-	bool child,
-	QWidget *mediaPreviewParent)
+	bool child)
 : Selector(
 	parent,
 	st,
@@ -225,8 +229,7 @@ Selector::Selector(
 	std::move(iconFactory),
 	std::move(paused),
 	std::move(close),
-	child,
-	mediaPreviewParent) {
+	child) {
 }
 
 #if 0 // not ready
@@ -263,8 +266,7 @@ Selector::Selector(
 	IconFactory iconFactory,
 	Fn<bool()> paused,
 	Fn<void(bool fast)> close,
-	bool child,
-	QWidget *mediaPreviewParent)
+	bool child)
 : RpWidget(parent)
 , _st(st)
 , _show(std::move(show))
@@ -272,7 +274,6 @@ Selector::Selector(
 , _recent(std::move(recent))
 , _listMode(mode)
 , _paused(std::move(paused))
-, _mediaPreviewParent(mediaPreviewParent)
 , _jumpedToPremium([=] { close(false); })
 , _cachedRound(
 	QSize(2 * st::reactStripSkip + st::reactStripSize, st::reactStripHeight),
@@ -470,10 +471,6 @@ void Selector::setBubbleUp(bool bubbleUp) {
 	_bubbleUp = bubbleUp;
 }
 
-void Selector::setExpandDown(bool expandDown) {
-	_expandDown = expandDown;
-}
-
 void Selector::initGeometry(int innerTop) {
 	const auto margins = marginsForShadow();
 	const auto parent = parentWidget()->rect();
@@ -483,11 +480,10 @@ void Selector::initGeometry(int innerTop) {
 		? (innerWidth + margins.left() + margins.right())
 		: parent.width();
 	const auto forAbout = width - margins.left() - margins.right();
-	const auto categoriesAndAboutTop = _useTransparency
+	_collapsedTopSkip = _useTransparency
 		? (extendTopForCategoriesAndAbout(forAbout) + _specialExpandTopSkip)
 		: opaqueExtendTopAbout(forAbout);
-	_collapsedTopSkip = _expandDown ? _aboutExtend : categoriesAndAboutTop;
-	_topAddOnExpand = categoriesAndAboutTop - _aboutExtend;
+	_topAddOnExpand = _collapsedTopSkip - _aboutExtend;
 	const auto height = margins.top()
 		+ _aboutExtend
 		+ innerHeight
@@ -852,15 +848,7 @@ void Selector::finishExpand() {
 }
 
 void Selector::paintBubble(QPainter &p, int innerWidth) {
-	const auto &bubble = _st.icons.stripBubble;
-	const auto bubbleRight = std::min(
-		st::reactStripBubbleRight,
-		(innerWidth - bubble.width()) / 2);
-	bubble.paint(
-		p,
-		_inner.x() + innerWidth - bubbleRight - bubble.width(),
-		_inner.y() + _inner.height() - _outer.y(),
-		width());
+	// AyuGram: removed
 }
 
 void Selector::paintEvent(QPaintEvent *e) {
@@ -882,13 +870,6 @@ void Selector::mouseMoveEvent(QMouseEvent *e) {
 		return;
 	}
 	setSelected(lookupSelectedIndex(e->pos()));
-}
-
-bool Selector::inVisibleArea(QPoint position) const {
-	return !_strip
-		|| _expandScheduled
-		|| _outerWithBubble.isEmpty()
-		|| _outerWithBubble.contains(position);
 }
 
 int Selector::lookupSelectedIndex(QPoint position) const {
@@ -928,20 +909,14 @@ void Selector::leaveEventHook(QEvent *e) {
 }
 
 void Selector::mousePressEvent(QMouseEvent *e) {
-	if (!inVisibleArea(e->pos())) {
-		e->ignore();
-		return;
-	} else if (!_strip) {
+	if (!_strip) {
 		return;
 	}
 	_pressed = lookupSelectedIndex(e->pos());
 }
 
 void Selector::mouseReleaseEvent(QMouseEvent *e) {
-	if (!inVisibleArea(e->pos())) {
-		e->ignore();
-		return;
-	} else if (!_strip) {
+	if (!_strip) {
 		return;
 	}
 	if (_pressed != lookupSelectedIndex(e->pos())) {
@@ -1019,24 +994,11 @@ void Selector::expand() {
 		margins.top() + heightLimit + margins.bottom());
 	const auto additionalBottom = willBeHeight - height();
 	const auto additional = _specialExpandTopSkip + additionalBottom;
-	const auto additionalTop = _expandDown ? _topAddOnExpand : 0;
 	if (additionalBottom < 0 || additional <= 0) {
 		return;
-	} else if (additionalBottom > 0 || additionalTop > 0) {
-		setGeometry(
-			x(),
-			y() - additionalTop,
-			width(),
-			height() + additionalTop + additionalBottom);
+	} else if (additionalBottom > 0) {
+		resize(width(), height() + additionalBottom);
 		raise();
-		if (additionalTop > 0) {
-			_outer.translate(0, additionalTop);
-			_outerWithBubble.translate(0, additionalTop);
-			_inner.translate(0, additionalTop);
-			if (_about) {
-				_about->move(_about->x(), _about->y() + additionalTop);
-			}
-		}
 	}
 
 	createList();
@@ -1120,11 +1082,8 @@ void Selector::createList() {
 			.customRecentFactory = _unifiedFactoryOwner->factory(),
 			.freeEffects = std::move(freeEffects),
 			.st = st,
-			.mediaPreviewParent = _mediaPreviewParent
-				? _mediaPreviewParent
-				: this,
+			.mediaPreviewParent = this,
 			.mediaPreviewMargins = marginsForShadow(),
-			.mediaPreviewPanelStyle = (_mediaPreviewParent == nullptr),
 		}));
 	if (!_reactions.stickers.empty()) {
 		auto descriptors = ranges::views::all(
@@ -1429,6 +1388,18 @@ AttachSelectorResult AttachSelectorToMenu(
 		Fn<void(ChosenReaction)> chosen,
 		TextWithEntities about,
 		IconFactory iconFactory) {
+	const auto &settings = AyuSettings::getInstance();
+	if (!AyuUi::needToShowItem(settings.showReactionsPanelInContextMenu())) {
+		return AttachSelectorResult::Skipped;
+	}
+
+	const auto peer = item->history()->peer;
+	if ((peer->isChannel() && !peer->isMegagroup() && !settings.showChannelReactions())
+		|| (peer->isMegagroup() && !settings.showGroupReactions())
+		|| (peer->isUser() && !settings.showPrivateChatReactions())) {
+		return AttachSelectorResult::Skipped;
+	}
+
 	const auto result = AttachSelectorToMenu(
 		menu,
 		desiredPosition,
@@ -1476,6 +1447,11 @@ auto AttachSelectorToMenu(
 	IconFactory iconFactory,
 	Fn<bool()> paused)
 -> base::expected<not_null<Selector*>, AttachSelectorResult> {
+	const auto &settings = AyuSettings::getInstance();
+	if (!AyuUi::needToShowItem(settings.showReactionsPanelInContextMenu())) {
+		return base::make_unexpected(AttachSelectorResult::Skipped);
+	}
+
 	if (reactions.recent.empty()) {
 		return base::make_unexpected(AttachSelectorResult::Skipped);
 	}

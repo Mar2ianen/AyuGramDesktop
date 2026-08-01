@@ -17,15 +17,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "api/api_single_message_search.h"
 
-class ChannelData;
-
 namespace MTP {
 class Error;
 } // namespace MTP
 
 namespace Data {
 class Forum;
-class CommunityInfo;
 enum class StorySourcesList : uchar;
 struct ReactionId;
 } // namespace Data
@@ -217,9 +214,6 @@ private:
 	void setupStories();
 	void setupSwipeBack();
 	void setupTopBarSuggestions();
-#ifdef _DEBUG
-	void setupTopBarSuggestionTestHotkeys();
-#endif // _DEBUG
 	void storiesExplicitCollapse();
 	void collectStoriesUserpicsViews(Data::StorySourcesList list);
 	void storiesToggleExplicitExpand(bool expand);
@@ -236,17 +230,12 @@ private:
 	void clearSearchCache(bool clearPosts);
 	void setSearchQuery(const QString &query, int cursorPosition = -1);
 	void updateTopBarSuggestions();
-	void updateCommunityRequestsBubble();
-	void updateCommunityAddChatButton();
-	void updateCommunityOverlaysVisibility();
-	[[nodiscard]] bool communityOverlaysShown() const;
 	void updateFrozenAccountBar();
 	void updateControlsVisibility(bool fast = false);
 	void updateLockUnlockVisibility(
 		anim::type animated = anim::type::instant);
 	void updateLoadMoreChatsVisibility();
 	void updateStoriesVisibility();
-	void updateStoriesTitleShown();
 	void updateJumpToDateVisibility(bool fast = false);
 	void updateSearchFromVisibility(bool fast = false);
 	void updateControlsGeometry();
@@ -260,9 +249,6 @@ private:
 		anim::type animated);
 	void changeOpenedFolder(Data::Folder *folder, anim::type animated);
 	void changeOpenedForum(Data::Forum *forum, anim::type animated);
-	void changeOpenedCommunity(
-		Data::CommunityInfo *community,
-		anim::type animated);
 	void hideChildList();
 	void destroyChildListCanvas();
 	[[nodiscard]] QPixmap grabForFolderSlideAnimation();
@@ -302,7 +288,6 @@ private:
 	void updateSuggestions(anim::type animated);
 	void processSearchFocusChange();
 	void closeSuggestions();
-	[[nodiscard]] bool searchActive() const;
 
 	[[nodiscard]] bool redirectToSearchPossible() const;
 	[[nodiscard]] bool redirectKeyToSearch(QKeyEvent *e) const;
@@ -347,20 +332,9 @@ private:
 
 	base::unique_qptr<Ui::RpWidget> _chatFilters;
 
-	base::unique_qptr<Ui::SlideWrap<Ui::RpWidget>> _topBarSuggestion;
-	base::unique_qptr<Ui::RpWidget> _topBarSuggestionPlaceholder;
+	QPointer<Ui::SlideWrap<Ui::RpWidget>> _topBarSuggestion;
 	rpl::event_stream<int> _topBarSuggestionHeightChanged;
-	base::unique_qptr<Ui::SlideWrap<Ui::RpWidget>> _communityRequests;
-	base::unique_qptr<Ui::RpWidget> _communityRequestsPlaceholder;
-	rpl::lifetime _communityRequestsLifetime;
-	int _communityRequestsCount = 0;
-	base::unique_qptr<Ui::SlideWrap<Ui::VerticalLayout>> _communityAddChat;
-	base::unique_qptr<Ui::RpWidget> _communityAddChatPlaceholder;
-	rpl::lifetime _communityAddChatLifetime;
-	base::unique_qptr<Ui::RpWidget> _communityAddChatNarrow;
-	rpl::event_stream<> _communityAddChatRefresh;
 	rpl::event_stream<bool> _searchStateForTopBarSuggestion;
-	rpl::event_stream<> _prepareTopBarSnapshot;
 	rpl::event_stream<bool> _openedFolderOrForumChanges;
 
 	object_ptr<Ui::ElasticScroll> _scroll;
@@ -388,14 +362,12 @@ private:
 
 	Data::Folder *_openedFolder = nullptr;
 	Data::Forum *_openedForum = nullptr;
-	Data::CommunityInfo *_openedCommunity = nullptr;
 	SearchState _searchState;
 	History *_searchInMigrated = nullptr;
 	rpl::lifetime _searchTagsLifetime;
 	QString _lastSearchText;
 	bool _searchSuggestionsLocked = false;
 	bool _searchHasFocus = false;
-	bool _searchEngaged = false;
 	bool _processingSearch = false;
 
 	rpl::event_stream<rpl::producer<Stories::Content>> _storiesContents;
@@ -423,9 +395,7 @@ private:
 	PeerData *_searchQueryFrom = nullptr;
 	std::vector<Data::ReactionId> _searchQueryTags;
 	ChatSearchTab _searchQueryTab = {};
-	ChannelData *_searchQueryCommunity = nullptr;
 	ChatTypeFilter _searchQueryFilter = {};
-	bool _searchQueryFromArchive = true;
 
 	Ui::Controls::SwipeBackResult _swipeBackData;
 	bool _swipeBackMirrored = false;
@@ -438,6 +408,9 @@ private:
 
 	Api::PeerSearch _peerSearch;
 	Api::SingleMessageSearch _singleMessageSearch;
+
+	std::vector<not_null<PeerData*>> _idSearchResults;
+	QString _idSearchQuery;
 
 	QPixmap _widthAnimationCache;
 

@@ -150,15 +150,13 @@ void Style::paintButtonBg(
 	const auto radius = [&](int index) {
 		return (rounding[index] == Corner::Large) ? large : small;
 	};
-	const auto tl = radius(0);
-	const auto tr = radius(1);
-	const auto bl = radius(2);
-	const auto br = radius(3);
-	if ((tl == tr) && (tl == bl) && (tl == br)) {
-		p.drawRoundedRect(rect, tl, tl);
-	} else {
-		p.drawPath(Ui::ComplexRoundedRectPath(rect, tl, tr, bl, br));
-	}
+	p.drawPath(
+		Ui::ComplexRoundedRectPath(
+			rect,
+			radius(0),
+			radius(1),
+			radius(2),
+			radius(3)));
 }
 
 void Style::paintButtonIcon(
@@ -435,7 +433,7 @@ QString BotKeyboard::tooltipText() const {
 }
 
 void BotKeyboard::updateSelected() {
-	Ui::Tooltip::Show(1000, this);
+	Ui::Tooltip::Show(350, this);
 
 	if (!_impl) return;
 

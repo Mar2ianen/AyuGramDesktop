@@ -11,8 +11,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/sections/settings_main.h"
 #include "settings/sections/settings_information.h"
 #include "settings/settings_common_session.h"
-#include "menu/menu_send.h"
 #include "ui/ui_utility.h"
+
+// AyuGram includes
+#include "ayu/ui/settings/settings_main.h"
+
 
 namespace Info {
 namespace Settings {
@@ -188,14 +191,6 @@ void Widget::saveChanges(FnMut<void()> done) {
 	_inner->sectionSaveChanges(std::move(done));
 }
 
-SendMenu::Details Widget::sendMenuDetails() const {
-	return _inner->sendMenuDetails();
-}
-
-bool Widget::processChosenSticker(ChatHelpers::FileChosen &&chosen) {
-	return _inner->processChosenSticker(std::move(chosen));
-}
-
 void Widget::showFinished() {
 	_inner->showFinished();
 
@@ -213,7 +208,8 @@ const Ui::RoundRect *Widget::bottomSkipRounding() const {
 
 rpl::producer<bool> Widget::desiredShadowVisibility() const {
 	return (_type == ::Settings::MainId()
-		|| _type == ::Settings::InformationId())
+		|| _type == ::Settings::InformationId()
+		|| _type == ::Settings::AyuMain::Id())
 		? ContentWidget::desiredShadowVisibility()
 		: rpl::single(true);
 }

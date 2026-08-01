@@ -31,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/ripple_animation.h"
 #include "ui/image/image.h"
 #include "ui/painter.h"
+#include "boxes/send_gif_with_caption_box.h"
 #include "boxes/stickers_box.h"
 #include "inline_bots/inline_bot_result.h"
 #include "storage/localstorage.h"
@@ -45,6 +46,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_menu_icons.h"
 
 #include <QtWidgets/QApplication>
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ui/boxes/confirm_box.h"
+#include "boxes/abstract_box.h"
+
 
 namespace ChatHelpers {
 namespace {
@@ -413,12 +420,21 @@ base::unique_qptr<Ui::PopupMenu> GifsListWidget::fillContextMenu(
 		icons);
 
 	if (!isInlineResult && _inlineQueryPeer) {
-		menu->addAction(
-			tr::lng_send_gif_with_caption(tr::now),
-			crl::guard(this, [=] {
-				selectInlineResult(selected, {}, true, true);
-			}),
-			&st::menuIconEdit);
+		auto done = crl::guard(this, [=](
+				Api::SendOptions options,
+				TextWithTags text) {
+			selectInlineResult(selected, options, true, std::move(text));
+		});
+		const auto show = _show;
+		const auto peer = _inlineQueryPeer;
+		menu->addAction(tr::lng_send_gif_with_caption(tr::now), [=] {
+			show->show(Box(
+				Ui::SendGifWithCaptionBox,
+				item->getDocument(),
+				peer,
+				copyDetails,
+				std::move(done)));
+		}, &st::menuIconEdit);
 	}
 
 	if (const auto item = _mosaic.maybeItemAt(_selected)) {
@@ -479,7 +495,7 @@ void GifsListWidget::selectInlineResult(
 		int index,
 		Api::SendOptions options,
 		bool forceSend,
-		bool needsCaption) {
+		TextWithTags caption) {
 	const auto item = _mosaic.maybeItemAt(index);
 	if (!item) {
 		return;
@@ -517,12 +533,29 @@ void GifsListWidget::selectInlineResult(
 		const auto media = document->activeMediaView();
 		const auto preview = Data::VideoPreviewState(media.get());
 		if (forceSend || (media && preview.loaded())) {
-			_fileChosen.fire({
-				.document = document,
-				.options = options,
-				.messageSendingFrom = messageSendingFrom(),
-				.needsCaption = needsCaption,
-			});
+			auto from = messageSendingFrom();
+			auto sendGIFCallback = crl::guard(
+				this,
+				[=]
+				{
+					_fileChosen.fire({
+						.document = document,
+						.options = options,
+						.messageSendingFrom = from,
+						.caption = std::move(caption),
+					});
+				});
+
+			const auto &settings = AyuSettings::getInstance();
+			if (settings.gifConfirmation()) {
+				Ui::show(Ui::MakeConfirmBox({
+					.text = tr::ayu_ConfirmationGIF(),
+					.confirmed = sendGIFCallback,
+					.confirmText = tr::lng_send_button()
+				}));
+			} else {
+				sendGIFCallback();
+			}
 		} else if (!preview.usingThumbnail()) {
 			if (preview.loading()) {
 				document->cancel();

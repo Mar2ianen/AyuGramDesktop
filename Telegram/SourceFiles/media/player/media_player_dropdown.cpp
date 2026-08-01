@@ -25,7 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Media::Player {
 namespace {
 
-constexpr auto kSpeedDebounceTimeout = crl::time(1000);
+constexpr auto kSpeedDebounceTimeout = crl::time(600);
 
 [[nodiscard]] float64 SpeedToSliderValue(float64 speed) {
 	return (speed - kSpeedMin) / (kSpeedMax - kSpeedMin);
@@ -767,10 +767,6 @@ void SpeedController::reloadFromLookup() {
 		setSpeed(lookup(false));
 		_speed = lookup(true);
 	}
-}
-
-void SpeedController::setQualities(std::vector<VideoQuality> qualities) {
-	_qualities = std::move(qualities);
 }
 
 float64 SpeedController::speed() const {

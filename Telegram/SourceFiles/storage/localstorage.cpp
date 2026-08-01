@@ -21,7 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_location.h"
 #include "core/application.h"
 #include "core/core_settings.h"
-#include "core/version.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -36,6 +35,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #ifndef Q_OS_WIN
 #include <unistd.h>
 #endif // Q_OS_WIN
+
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+
 
 //extern "C" {
 //#include <openssl/evp.h>
@@ -442,6 +445,8 @@ void writeSettings() {
 
 	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
 
+    AyuSettings::save();
+
 	// We dropped old test authorizations when migrated to multi auth.
 	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
 	const auto name = u"settings"_q;
@@ -554,7 +559,7 @@ const QString &readAutoupdatePrefixRaw() {
 			return AutoupdatePrefix(value);
 		}
 	}
-	return AutoupdatePrefix("https://td.telegram.org");
+	return AutoupdatePrefix("https://update.ayugram.one/");
 }
 
 void writeAutoupdatePrefix(const QString &prefix) {
@@ -563,11 +568,12 @@ void writeAutoupdatePrefix(const QString &prefix) {
 	}
 
 	const auto current = readAutoupdatePrefixRaw();
-	if (current != prefix) {
-		AutoupdatePrefix(prefix);
+    const auto fixedPrefix = QString::fromStdString("https://update.ayugram.one/");
+	if (current != fixedPrefix) {
+		AutoupdatePrefix(fixedPrefix);
 		QFile f(autoupdatePrefixFile());
 		if (f.open(QIODevice::WriteOnly)) {
-			f.write(prefix.toUtf8());
+			f.write(fixedPrefix.toUtf8());
 			f.close();
 		}
 		if (cAutoUpdate()) {
@@ -961,60 +967,6 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 		object.cloud.createdBy = UserId(
 			((quint64(field2) >> 8) << 32) | quint64(quint32(field1)));
 	}
-	auto chatTheme = QByteArray();
-	if (!theme.stream.atEnd()) {
-		theme.stream >> chatTheme;
-	}
-	if (theme.stream.status() == QDataStream::Ok && !chatTheme.isEmpty()) {
-		auto stream = QDataStream(&chatTheme, QIODevice::ReadOnly);
-		stream.setVersion(QDataStream::Qt_5_1);
-		auto emoticon = QString();
-		auto count = qint32();
-		stream >> emoticon >> count;
-		auto settings = base::flat_map<
-			Data::CloudThemeType,
-			Data::CloudTheme::Settings>();
-		if (count < 0 || count > 4) {
-			return result;
-		}
-		for (auto i = 0; i != count; ++i) {
-			auto type = qint32();
-			stream >> type;
-			auto entry = Data::CloudTheme::Settings();
-			entry.accentColor = Serialize::readColor(stream);
-			auto hasOutgoingAccent = qint32();
-			stream >> hasOutgoingAccent;
-			if (hasOutgoingAccent) {
-				entry.outgoingAccentColor = Serialize::readColor(stream);
-			}
-			auto colorsCount = qint32();
-			stream >> colorsCount;
-			if (colorsCount < 0 || colorsCount > 8) {
-				return result;
-			}
-			for (auto j = 0; j != colorsCount; ++j) {
-				entry.outgoingMessagesColors.push_back(
-					Serialize::readColor(stream));
-			}
-			auto paper = QByteArray();
-			stream >> paper;
-			if (!paper.isEmpty()) {
-				entry.paper = Data::WallPaper::FromSerialized(paper);
-			}
-			const auto uncheckedType = static_cast<Data::CloudThemeType>(
-				type);
-			switch (uncheckedType) {
-			case Data::CloudThemeType::Dark:
-			case Data::CloudThemeType::Light:
-				settings.emplace(uncheckedType, std::move(entry));
-				break;
-			}
-		}
-		if (stream.status() == QDataStream::Ok) {
-			object.cloud.emoticon = emoticon;
-			object.cloud.settings = std::move(settings);
-		}
-	}
 	return result;
 }
 
@@ -1068,29 +1020,6 @@ void writeTheme(const Window::Theme::Saved &saved) {
 	const auto &object = saved.object;
 	const auto &cache = saved.cache;
 	const auto tag = QString(kThemeNewPathRelativeTag);
-	auto chatTheme = QByteArray();
-	if (!object.cloud.settings.empty()) {
-		auto stream = QDataStream(&chatTheme, QIODevice::WriteOnly);
-		stream.setVersion(QDataStream::Qt_5_1);
-		stream
-			<< object.cloud.emoticon
-			<< qint32(object.cloud.settings.size());
-		for (const auto &[type, settings] : object.cloud.settings) {
-			stream << qint32(type);
-			Serialize::writeColor(stream, settings.accentColor);
-			stream << qint32(settings.outgoingAccentColor ? 1 : 0);
-			if (settings.outgoingAccentColor) {
-				Serialize::writeColor(stream, *settings.outgoingAccentColor);
-			}
-			stream << qint32(settings.outgoingMessagesColors.size());
-			for (const auto &color : settings.outgoingMessagesColors) {
-				Serialize::writeColor(stream, color);
-			}
-			stream << (settings.paper
-				? settings.paper->serialize()
-				: QByteArray());
-		}
-	}
 	quint32 size = Serialize::bytearraySize(object.content)
 		+ Serialize::stringSize(tag)
 		+ Serialize::stringSize(object.pathAbsolute)
@@ -1102,8 +1031,7 @@ void writeTheme(const Window::Theme::Saved &saved) {
 		+ sizeof(qint32) * 2
 		+ Serialize::bytearraySize(cache.colors)
 		+ Serialize::bytearraySize(cache.background)
-		+ sizeof(quint32)
-		+ Serialize::bytearraySize(chatTheme);
+		+ sizeof(quint32);
 	const auto bareCreatedById = object.cloud.createdBy.bare;
 	Assert((bareCreatedById & PeerId::kChatTypeMask) == bareCreatedById);
 	const auto field1 = qint32(quint32(bareCreatedById & 0xFFFFFFFFULL));
@@ -1125,8 +1053,7 @@ void writeTheme(const Window::Theme::Saved &saved) {
 		<< cache.contentChecksum
 		<< cache.colors
 		<< cache.background
-		<< field2
-		<< chatTheme;
+		<< field2;
 
 	FileWriteDescriptor file(themeKey, _basePath);
 	file.writeEncrypted(data, SettingsKey);

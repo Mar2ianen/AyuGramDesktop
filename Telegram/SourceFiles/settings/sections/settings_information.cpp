@@ -10,7 +10,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/sections/settings_main.h"
 #include "settings/settings_builder.h"
 #include "settings/settings_common_session.h"
-#include "settings/business/settings_chatbots.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/vertical_layout_reorder.h"
 #include "ui/wrap/padding_wrap.h"
@@ -23,7 +22,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/controls/userpic_button.h"
-#include "ui/new_badges.h"
 #include "ui/text/text_utilities.h"
 #include "ui/delayed_activation.h"
 #include "ui/painter.h"
@@ -38,7 +36,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/premium_limits_box.h"
 #include "boxes/username_box.h"
 #include "boxes/peers/edit_peer_color_box.h"
-#include "data/business/data_business_chatbots.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_peer_values.h"
@@ -47,7 +44,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_premium_limits.h"
 #include "info/profile/info_profile_values.h"
 #include "info/profile/info_profile_badge.h"
-#include "info/profile/info_profile_phone_menu.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
 #include "main/main_session.h"
@@ -65,6 +61,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "base/random.h"
 #include "styles/style_chat.h" // popupMenuExpandedSeparator
+#include "styles/style_dialogs.h" // dialogsPremiumIcon
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
 #include "styles/style_menu_icons.h"
@@ -72,6 +69,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QGuiApplication>
 #include <QtCore/QBuffer>
+
+// AyuGram includes
+#include "ayu/ui/ayu_userpic.h"
+#include "ayu/utils/telegram_helpers.h"
+#include "styles/style_info.h"
+
 
 namespace Settings {
 namespace {
@@ -89,11 +92,10 @@ struct InformationHighlightTargets {
 	QPointer<Ui::RpWidget> phone;
 	QPointer<Ui::RpWidget> username;
 	QPointer<Ui::RpWidget> birthday;
-	QPointer<Ui::RpWidget> chatAutomation;
 };
 
 constexpr auto kSaveBioTimeout = 1000;
-constexpr auto kPlayStatusLimit = 2;
+constexpr auto kPlayStatusLimit = 12;
 
 class ComposedBadge final : public Ui::RpWidget {
 public:
@@ -109,9 +111,11 @@ private:
 	rpl::variable<QString> _text;
 	rpl::event_stream<int> _unreadWidth;
 	rpl::event_stream<int> _premiumWidth;
+	rpl::event_stream<int> _exteraWidth;
 
 	QPointer<Ui::RpWidget> _unread;
 	Info::Profile::Badge _badge;
+	Info::Profile::Badge _exteraBadge;
 
 };
 
@@ -130,9 +134,18 @@ ComposedBadge::ComposedBadge(
 		session,
 		Info::Profile::BadgeContentForPeer(session->user()),
 		nullptr,
-		std::move(animationPaused),
+		animationPaused,
 		kPlayStatusLimit,
-		Info::Profile::BadgeType::Premium) {
+		Info::Profile::BadgeType::Premium)
+, _exteraBadge(
+		this,
+		st::infoPeerBadge,
+		session,
+		ExteraBadgeTypeFromPeer(session->user()),
+		nullptr,
+		std::move(animationPaused),
+		0,
+		Info::Profile::BadgeType::Extera | Info::Profile::BadgeType::ExteraSupporter | Info::Profile::BadgeType::ExteraCustom) {
 	if (hasUnread) {
 		_unread = Badge::CreateUnread(this, rpl::single(
 			rpl::empty
@@ -163,6 +176,16 @@ ComposedBadge::ComposedBadge(
 		}
 	}, lifetime());
 
+	_exteraBadge.updated(
+	) | rpl::on_next([=] {
+		if (const auto widget = _exteraBadge.widget()) {
+			widget->widthValue(
+			) | rpl::start_to_stream(_exteraWidth, widget->lifetime());
+		} else {
+			_exteraWidth.fire(0);
+		}
+	}, lifetime());
+
 	auto textWidth = _text.value() | rpl::map([=] {
 		return button->fullTextWidth();
 	});
@@ -171,11 +194,15 @@ ComposedBadge::ComposedBadge(
 		_premiumWidth.events_starting_with(_badge.widget()
 			? _badge.widget()->width()
 			: 0),
+		_exteraWidth.events_starting_with(_exteraBadge.widget()
+			? _exteraBadge.widget()->width()
+			: 0),
 		std::move(textWidth),
 		button->sizeValue()
 	) | rpl::on_next([=](
 			int unreadWidth,
 			int premiumWidth,
+			int exteraWidth,
 			int textWidth,
 			const QSize &buttonSize) {
 		const auto &st = button->st();
@@ -183,7 +210,14 @@ ComposedBadge::ComposedBadge(
 		const auto textRightPosition = st.padding.left()
 			+ textWidth
 			+ skip;
-		const auto minWidth = unreadWidth + premiumWidth + skip;
+		const auto exteraGap = exteraWidth
+			? st::infoVerifiedCheckPosition.x()
+			: 0;
+		const auto minWidth = unreadWidth
+			+ premiumWidth
+			+ exteraGap
+			+ exteraWidth
+			+ skip;
 		const auto maxTextWidth = buttonSize.width()
 			- minWidth
 			- st.padding.right();
@@ -196,6 +230,10 @@ ComposedBadge::ComposedBadge(
 
 		_badge.move(
 			0,
+			st.padding.top(),
+			buttonSize.height() - st.padding.top());
+		_exteraBadge.move(
+			premiumWidth,
 			st.padding.top(),
 			buttonSize.height() - st.padding.top());
 		if (_unread) {
@@ -266,6 +304,7 @@ void SetupPhoto(
 		not_null<Window::SessionController*> controller,
 		not_null<UserData*> self,
 		InformationHighlightTargets *targets) {
+	Ui::AddSkip(container); // fix avatar cutting on top
 	const auto wrap = container->add(object_ptr<Ui::FixedHeightWidget>(
 		container,
 		st::settingsInfoPhotoHeight));
@@ -342,19 +381,12 @@ void SetupPhoto(
 void ShowMenu(
 		QWidget *parent,
 		const QString &copyButton,
-		const QString &text,
-		const style::icon *copyIcon = nullptr,
-		Fn<void(not_null<Ui::PopupMenu*>)> extend = nullptr) {
-	const auto menu = Ui::CreateChild<Ui::PopupMenu>(
-		parent,
-		extend ? st::popupMenuWithIcons : st::defaultPopupMenu);
+		const QString &text) {
+	const auto menu = Ui::CreateChild<Ui::PopupMenu>(parent);
 
 	menu->addAction(copyButton, [=] {
 		QGuiApplication::clipboard()->setText(text);
-	}, copyIcon);
-	if (extend) {
-		extend(menu);
-	}
+	});
 	menu->popup(QCursor::pos());
 }
 
@@ -364,31 +396,13 @@ not_null<Ui::SettingsButton*> AddRow(
 		rpl::producer<TextWithEntities> value,
 		const QString &copyButton,
 		Fn<void()> edit,
-		IconDescriptor &&descriptor,
-		bool markedValue = false,
-		Fn<void(not_null<Ui::PopupMenu*>)> menuExtender = nullptr,
-		const style::icon *copyIcon = nullptr) {
-	const auto wrap = markedValue
-		? AddButtonWithIcon(
-			container,
-			rpl::duplicate(label),
-			st::settingsButton,
-			std::move(descriptor))
-		: AddButtonWithLabel(
-			container,
-			rpl::duplicate(label),
-			rpl::duplicate(value) | rpl::map([](const auto &t) {
-				return t.text;
-			}),
-			st::settingsButton,
-			std::move(descriptor));
-	if (markedValue) {
-		CreateRightLabel(
-			wrap,
-			rpl::duplicate(value),
-			st::settingsButton,
-			rpl::duplicate(label));
-	}
+		IconDescriptor &&descriptor) {
+	const auto wrap = AddButtonWithLabel(
+		container,
+		std::move(label),
+		std::move(value) | rpl::map([](const auto &t) { return t.text; }),
+		st::settingsButton,
+		std::move(descriptor));
 	const auto forcopy = Ui::CreateChild<QString>(wrap.get());
 	wrap->setAcceptBoth();
 	wrap->clicks(
@@ -398,14 +412,19 @@ not_null<Ui::SettingsButton*> AddRow(
 		if (button == Qt::LeftButton) {
 			edit();
 		} else if (!forcopy->isEmpty()) {
-			ShowMenu(wrap, copyButton, *forcopy, copyIcon, menuExtender);
+			ShowMenu(wrap, copyButton, *forcopy);
 		}
 	}, wrap->lifetime());
 
-	std::move(
+	auto existing = base::duplicate(
 		value
-	) | rpl::filter([=](const TextWithEntities &text) {
-		return markedValue || text.entities.isEmpty();
+	) | rpl::map([](const TextWithEntities &text) {
+		return text.entities.isEmpty();
+	});
+	base::duplicate(
+		value
+	) | rpl::filter([](const TextWithEntities &text) {
+		return text.entities.isEmpty();
 	}) | rpl::on_next([=](const TextWithEntities &text) {
 		*forcopy = text.text;
 	}, wrap->lifetime());
@@ -472,69 +491,6 @@ void SetupBirthday(
 			tr::marked)));
 }
 
-void SetupChatAutomation(
-		not_null<Ui::VerticalLayout*> container,
-		not_null<Window::SessionController*> controller,
-		not_null<UserData*> self,
-		InformationHighlightTargets *targets) {
-	const auto session = &self->session();
-	session->data().chatbots().preload();
-
-	auto label = session->data().chatbots().value(
-	) | rpl::map([](const Data::ChatbotsSettings &value) {
-		if (!value.bot) {
-			return tr::lng_settings_chat_automation_off(tr::now);
-		}
-		const auto username = value.bot->username();
-		return username.isEmpty()
-			? value.bot->name()
-			: ('@' + username);
-	});
-
-	const auto &st = st::settingsButton;
-	auto title = tr::lng_settings_chat_automation_label();
-	const auto button = AddButtonWithLabel(
-		container,
-		rpl::duplicate(title),
-		std::move(label),
-		st,
-		{ &st::settingsIconChatAutomation });
-
-	button->setClickedCallback([=] {
-		controller->showSettings(Settings::ChatbotsId());
-	});
-
-	{
-		const auto badge = Ui::NewBadge::CreateNewBadge(
-			button,
-			tr::lng_premium_summary_new_badge()).get();
-		rpl::combine(
-			std::move(title),
-			button->widthValue()
-		) | rpl::on_next([=, &st](
-				const QString &text,
-				int width) {
-			const auto space = st.style.font->spacew;
-			const auto left = st.padding.left()
-				+ st.style.font->width(text)
-				+ space;
-			const auto available = width - left - st.padding.right();
-			badge->setVisible(available >= badge->width());
-			if (!badge->isHidden()) {
-				const auto top = st.padding.top()
-					+ st.style.font->ascent
-					- st::settingsPremiumNewBadge.style.font->ascent
-					- st::settingsPremiumNewBadgePadding.top();
-				badge->moveToLeft(left, top, width);
-			}
-		}, badge->lifetime());
-	}
-
-	if (targets) {
-		targets->chatAutomation = button;
-	}
-}
-
 void SetupPersonalChannel(
 		not_null<Ui::VerticalLayout*> container,
 		not_null<Window::SessionController*> controller,
@@ -562,8 +518,6 @@ void SetupPersonalChannel(
 		tr::lng_mediaview_copy(tr::now),
 		edit,
 		{ &st::menuIconChannel });
-
-	SetupChatAutomation(container, controller, self, targets);
 
 	const auto colorButton = AddPeerColorButton(
 		container,
@@ -605,25 +559,17 @@ void SetupRows(
 		targets->name = nameButton;
 	}
 
-	const auto showChangePhone = [=] {
-		controller->show(
-			Ui::MakeInformBox(tr::lng_change_phone_error()));
-		controller->window().activate();
+	const auto copyPhone = [=] {
+		QGuiApplication::clipboard()->setText(self->phone());
+		controller->showToast(tr::lng_text_copied(tr::now), 500);
 	};
 	const auto phoneButton = AddRow(
 		container,
 		tr::lng_settings_phone_label(),
-		Info::Profile::PhoneWithSpoilerValue(
-			self,
-			Info::Profile::PhoneValue(self)),
+		Info::Profile::PhoneValue(self),
 		tr::lng_profile_copy_phone(tr::now),
-		showChangePhone,
-		{ &st::menuIconPhone },
-		true,
-		[=](not_null<Ui::PopupMenu*> menu) {
-			Info::Profile::AddPhoneSpoilerMenu(menu, self);
-		},
-		&st::menuIconCopy);
+		copyPhone,
+		{ &st::menuIconPhone });
 	if (targets) {
 		targets->phone = phoneButton;
 	}
@@ -898,7 +844,7 @@ void SetupAccountsWrap(
 			pen.setWidthF(line);
 			p.setPen(pen);
 			p.setBrush(Qt::NoBrush);
-			p.drawEllipse(rect);
+			AyuUserpic::PaintShape(p, rect);
 		}
 	}, state->userpic.lifetime());
 
@@ -932,8 +878,9 @@ void SetupAccountsWrap(
 		}
 
 		addAction(tr::lng_profile_copy_phone(tr::now), [=] {
-			Info::Profile::CopyPhoneToClipboard(
+			const auto phone = rpl::variable<TextWithEntities>(
 				Info::Profile::PhoneValue(session->user()));
+			QGuiApplication::clipboard()->setText(phone.current().text);
 		}, &st::menuIconCopy);
 
 		if (!locked) {
@@ -1054,8 +1001,6 @@ not_null<Ui::SlideWrap<Ui::SettingsButton>*> AccountsList::setupAdd() {
 	using Environment = MTP::Environment;
 	const auto add = [=](Environment environment, bool newWindow = false) {
 		auto &domain = _controller->session().domain();
-		domain.removeRedundantAccounts();
-
 		auto found = false;
 		for (const auto &[index, account] : domain.accounts()) {
 			const auto raw = account.get();
@@ -1071,7 +1016,6 @@ not_null<Ui::SlideWrap<Ui::SettingsButton>*> AccountsList::setupAdd() {
 			domain.addActivated(environment, true);
 		} else {
 			_controller->window().preventOrInvoke([=] {
-				Core::App().setActivePrimaryWindow(&_controller->window());
 				_controller->session().domain().addActivated(environment);
 			});
 		}
@@ -1255,19 +1199,6 @@ void BuildInformationSection(SectionBuilder &builder) {
 	});
 	builder.add(nullptr, [] {
 		return SearchEntry{
-			.id = u"edit/chat-automation"_q,
-			.title = tr::lng_settings_chat_automation_label(tr::now),
-			.keywords = {
-				u"chat"_q,
-				u"automation"_q,
-				u"bot"_q,
-				u"chatbot"_q,
-				u"chatbots"_q,
-			},
-		};
-	});
-	builder.add(nullptr, [] {
-		return SearchEntry{
 			.id = u"edit/add-account"_q,
 			.title = tr::lng_menu_add_account(tr::now),
 			.keywords = { u"account"_q, u"add"_q, u"switch"_q, u"multiple"_q },
@@ -1297,7 +1228,6 @@ private:
 	QPointer<Ui::RpWidget> _phone;
 	QPointer<Ui::RpWidget> _username;
 	QPointer<Ui::RpWidget> _birthday;
-	QPointer<Ui::RpWidget> _chatAutomation;
 
 };
 
@@ -1329,8 +1259,7 @@ void Information::setupContent() {
 		name = &_name,
 		phone = &_phone,
 		username = &_username,
-		birthday = &_birthday,
-		chatAutomation = &_chatAutomation
+		birthday = &_birthday
 	](
 			not_null<Ui::VerticalLayout*> container,
 			not_null<Window::SessionController*> controller,
@@ -1370,7 +1299,6 @@ void Information::setupContent() {
 		*phone = targets.phone;
 		*username = targets.username;
 		*birthday = targets.birthday;
-		*chatAutomation = targets.chatAutomation;
 
 		if (highlights) {
 			if (*photo) {
@@ -1431,12 +1359,6 @@ void Information::setupContent() {
 				highlights->push_back({
 					u"edit/birthday"_q,
 					{ birthday->data(), { .rippleShape = true } },
-				});
-			}
-			if (*chatAutomation) {
-				highlights->push_back({
-					u"edit/chat-automation"_q,
-					{ chatAutomation->data(), { .rippleShape = true } },
 				});
 			}
 		}
