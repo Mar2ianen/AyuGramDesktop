@@ -751,9 +751,11 @@ FillMenuResult FillSendMenu(
 			: AyuSettings::ghost();
 		const auto sendWithoutSound = ghost.shouldSendWithoutSound();
 		menu->addAction(
-			sendWithoutSound ? tr::ayu_SendWithSound(tr::now) : tr::lng_send_silent_message(tr::now),
+			sendWithoutSound
+				? QStringLiteral("Send with sound")
+				: tr::lng_send_silent_message(tr::now),
 			[=] { action({ Api::SendOptions{ .silent = true } }, details); },
-			sendWithoutSound ? &icons.menuUnmute : &icons.menuMute);
+			&icons.menuMute);
 	}
 	if (sending && type != Type::SilentOnly) {
 		menu->addAction(
