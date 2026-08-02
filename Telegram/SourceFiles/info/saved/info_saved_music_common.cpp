@@ -93,7 +93,6 @@ void SetupSavedMusic(
 						})));
 
 				musicButton->hide(anim::type::instant);
-				musicButton->ease = anim::easeOutCubic;
 				musicButton->setDuration(250);
 				musicButton->entity()->setAcceptBoth(true);
 				musicButton->entity()->clicks() | rpl::filter([=](Qt::MouseButton mouseButton)
@@ -110,8 +109,8 @@ void SetupSavedMusic(
 
 											  contextMenu->addAction(
 												  settings.adaptiveCoverColor()
-													  ? tr::ayu_DisableColorfulCover(tr::now)
-													  : tr::ayu_EnableColorfulCover(tr::now),
+																? QStringLiteral("Disable colorful cover")
+																: QStringLiteral("Enable colorful cover"),
 												  [=]
 												  {
 													  AyuSettings::getInstance().setAdaptiveCoverColor(!AyuSettings::getInstance().adaptiveCoverColor());
