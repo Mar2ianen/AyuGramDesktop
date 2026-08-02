@@ -84,7 +84,7 @@ public:
 	QImage spoilerTagBackground() const override;
 
 	void hideSpoilers() override;
-	void revealSpoilers() override;
+	void revealSpoilers();
 	bool needsBubble() const override;
 	bool customInfoLayout() const override {
 		return true;

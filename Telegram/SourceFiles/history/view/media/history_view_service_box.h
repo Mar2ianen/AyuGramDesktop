@@ -103,7 +103,7 @@ public:
 		return _content->hideServiceText();
 	}
 	void hideSpoilers() override;
-	void revealSpoilers() override;
+	void revealSpoilers();
 
 	bool hasHeavyPart() const override;
 	void unloadHeavyPart() override;
