@@ -54,7 +54,22 @@ rpl::producer<TextWithEntities> Text2() {
 		tr::marked);
 }
 
-QString telegramFaqLink();
+QString telegramFaqLink() {
+	const auto result = u"https://telegram.org/faq"_q;
+	const auto langpacked = [&](const char *language) {
+		return result + '/' + language;
+	};
+	const auto current = Lang::Id();
+	for (const auto language : { "de", "es", "it", "ko" }) {
+		if (current.startsWith(QLatin1String(language))) {
+			return langpacked(language);
+		}
+	}
+	if (current.startsWith(u"pt-br"_q)) {
+		return langpacked("br");
+	}
+	return result;
+}
 
 rpl::producer<TextWithEntities> Text3() {
 	return tr::lng_about_text3(
@@ -65,7 +80,9 @@ rpl::producer<TextWithEntities> Text3() {
 
 } // namespace
 
-void AboutBox(not_null<Ui::GenericBox*> box) {
+void AboutBox(
+		not_null<Ui::GenericBox*> box,
+		Window::SessionController*) {
 	box->setTitle(u"Telegram Desktop"_q);
 
 	auto layout = box->verticalLayout();
@@ -132,23 +149,6 @@ void AboutBox(not_null<Ui::GenericBox*> box) {
 	box->addButton(tr::lng_close(), [=] { box->closeBox(); });
 
 	box->setWidth(st::aboutWidth);
-}
-
-QString telegramFaqLink() {
-	const auto result = u"https://telegram.org/faq"_q;
-	const auto langpacked = [&](const char *language) {
-		return result + '/' + language;
-	};
-	const auto current = Lang::Id();
-	for (const auto language : { "de", "es", "it", "ko" }) {
-		if (current.startsWith(QLatin1String(language))) {
-			return langpacked(language);
-		}
-	}
-	if (current.startsWith(u"pt-br"_q)) {
-		return langpacked("br");
-	}
-	return result;
 }
 
 QString currentVersionText() {
