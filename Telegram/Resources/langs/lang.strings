@@ -8573,4 +8573,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_sr_languages_column_native" = "Native name";
 "lng_sr_languages_column_name" = "Language name";
 
+"ayu_ExpiringVideoMessageNote" = "This video message can be played as many times as you want.";
+"ayu_ExpiringVoiceMessageNote" = "This voice message can be played as many times as you want.";
+
 // Keys finished
