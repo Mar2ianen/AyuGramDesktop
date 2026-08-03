@@ -125,12 +125,12 @@ base::options::toggle OptionDisableTouchbar({
 const char kOptionNewWindowsSizeAsFirst[] = "new-windows-size-as-first";
 const char kOptionDisableTouchbar[] = "touchbar-disabled";
 
-const QImage &Logo() {
+QImage Logo() {
 	static const auto result = QImage(u":/gui/art/logo_256.png"_q);
 	return result;
 }
 
-const QImage &LogoNoMargin() {
+QImage LogoNoMargin() {
 	static const auto result = QImage(u":/gui/art/logo_256_no_margin.png"_q);
 	return result;
 }
