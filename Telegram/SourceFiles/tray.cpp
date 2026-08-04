@@ -121,8 +121,8 @@ void Tray::rebuildMenu() {
 			std::move(ghostActiveChanges)
 		) | rpl::map([=](auto, bool active) {
 			return active
-				? tr::ayu_DisableGhostModeTray(tr::now)
-				: tr::ayu_EnableGhostModeTray(tr::now);
+				? QStringLiteral("Disable ghost mode")
+				: QStringLiteral("Enable ghost mode");
 		});
 		_tray.addAction(
 			std::move(turnGhostModeText),
@@ -141,8 +141,8 @@ void Tray::rebuildMenu() {
 				bool streamerModeEnabled = AyuFeatures::StreamerMode::isEnabled();
 
 				return streamerModeEnabled
-						   ? tr::ayu_DisableStreamerModeTray(tr::now)
-						   : tr::ayu_EnableStreamerModeTray(tr::now);
+						   ? QStringLiteral("Disable streamer mode")
+						   : QStringLiteral("Enable streamer mode");
 			});
 		_tray.addAction(
 			std::move(turnStreamerModeText),

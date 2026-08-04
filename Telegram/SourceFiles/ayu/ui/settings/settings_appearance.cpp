@@ -259,7 +259,7 @@ void BuildTrayElements(SectionBuilder &builder, AyuSectionBuilder &ayu) {
 
 	ayu.addSettingToggle({
 		.id = u"ayu/showGhostToggleInTray"_q,
-		.title = tr::ayu_EnableGhostModeTray(),
+		.title = QStringLiteral("Show ghost mode tray toggle"),
 		.getter = &AyuSettings::showGhostToggleInTray,
 		.setter = &AyuSettings::setShowGhostToggleInTray,
 	});
@@ -267,7 +267,7 @@ void BuildTrayElements(SectionBuilder &builder, AyuSectionBuilder &ayu) {
 #if defined Q_OS_WIN || defined Q_OS_MAC
 	ayu.addSettingToggle({
 		.id = u"ayu/showStreamerToggleInTray"_q,
-		.title = tr::ayu_EnableStreamerModeTray(),
+		.title = QStringLiteral("Show streamer mode tray toggle"),
 		.getter = &AyuSettings::showStreamerToggleInTray,
 		.setter = &AyuSettings::setShowStreamerToggleInTray,
 	});
