@@ -95,9 +95,14 @@ if (NOT DESKTOP_APP_DISABLE_SWIFT6)
 endif()
 
 target_precompile_headers(Telegram PRIVATE $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:${src_loc}/stdafx.h>)
+file(GLOB_RECURSE ayu_files CONFIGURE_DEPENDS RELATIVE ${src_loc}
+    "ayu/*.cpp"
+    "ayu/*.h"
+)
 nice_target_sources(Telegram ${src_loc}
 PRIVATE
     ${style_files}
+    ${ayu_files}
 
     api/api_attached_stickers.cpp
     api/api_attached_stickers.h
