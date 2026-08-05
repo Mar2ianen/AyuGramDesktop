@@ -353,7 +353,7 @@ void AyuMusicButton::paintEvent(QPaintEvent *e) {
 
 int AyuMusicButton::resizeGetHeight(int newWidth) {
 	const auto padding = st::infoMusicButtonPadding;
-	const auto &font = st::infoMusicButtonTitle.style.font;
+	const auto &font = st::defaultFlatLabel.style.font;
 
 	const auto top = padding.top();
 	const auto skip = st::normalFont->spacew / 2;
