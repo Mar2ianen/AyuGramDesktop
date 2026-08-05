@@ -403,15 +403,6 @@ void AyuSettings::load() {
 		LOG(("AyuGramSettings: failed to read settings file (not json-like)"));
 	}
 
-	if (cGhost()) {
-		auto &ghost = AyuSettings::ghost();
-		ghost._sendReadMessages = false;
-		ghost._sendReadStories = false;
-		ghost._sendOnlinePackets = false;
-		ghost._sendUploadProgress = false;
-		ghost._sendOfflinePacketAfterOnline = true;
-	}
-
 	settings.validate();
 }
 
