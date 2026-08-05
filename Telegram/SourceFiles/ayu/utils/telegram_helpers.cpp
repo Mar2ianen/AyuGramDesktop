@@ -728,7 +728,6 @@ void processMessageDelete(not_null<HistoryItem*> item) {
 	if (!isMessageSavable(item)) {
 		item->destroy();
 	} else {
-		item->setDeleted();
 		AyuMessages::addDeletedMessage(item);
 	}
 }
@@ -842,6 +841,10 @@ void searchPeerInner(const QString &peerId, Main::Session *session, const Userna
 					return QString();
 				},
 				[&](const MTPDbotInlineMessageMediaWebPage &data)
+				{
+					return QString();
+				},
+				[&](const MTPDbotInlineMessageRichMessage &data)
 				{
 					return QString();
 				});
@@ -1175,13 +1178,10 @@ TextWithEntities reverseLocalPremiumEmoji(const TextWithEntities &text, not_null
 		if (entity.type() != EntityType::CustomEmoji) {
 			continue;
 		}
-		const auto shouldConvert = entity.isLocal()
-			? (isForQuote
-				|| (!history->peer->isSelf() && !premium && !emojiAllowed(entity)))
-			: (!isForQuote
-				&& !history->peer->isSelf()
-				&& !premium
-				&& !emojiAllowed(entity));
+		const auto shouldConvert = !isForQuote
+			&& !history->peer->isSelf()
+			&& !premium
+			&& !emojiAllowed(entity);
 		if (shouldConvert) {
 			entity = EntityInText(
 				EntityType::CustomUrl,
@@ -1216,7 +1216,6 @@ void applyLocalPremiumEmoji(TextWithEntities &text) {
 							entity.offset(),
 							entity.length(),
 							emojiId);
-						entity.setLocal();
 					}
 				}
 			}
@@ -1359,6 +1358,10 @@ void getUserRegistrationDateInner(
 					return QString();
 				},
 				[&](const MTPDbotInlineMessageMediaWebPage &data)
+				{
+					return QString();
+				},
+				[&](const MTPDbotInlineMessageRichMessage &data)
 				{
 					return QString();
 				});
