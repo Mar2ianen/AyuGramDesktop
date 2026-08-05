@@ -34,16 +34,16 @@ ID PerDialogFiltersListRow::dialogId() const {
 
 QString PerDialogFiltersListRow::generateName() {
 	if (const auto from = getPeerFromDialogId(peerId.value & PeerId::kChatTypeMask)) {
-		this->setPeer(from);
-		return PeerListRow::generateName();
+		return from->name();
 	}
 	return QString("UNKNOWN (ID: %1)").arg(QString::number(peerId.value & PeerId::kChatTypeMask));
 }
 
 PaintRoundImageCallback PerDialogFiltersListRow::generatePaintUserpicCallback(bool forceRound) {
 	if (const auto from = getPeerFromDialogId(peerId.value & PeerId::kChatTypeMask)) {
-		this->setPeer(from);
-		return PeerListRow::generatePaintUserpicCallback(forceRound);
+		return forceRound
+			? ForceRoundUserpicCallback(from)
+			: PaintUserpicCallback(from, false);
 	}
 
 	return [=](Painter &p, int x, int y, int outerWidth, int size) mutable

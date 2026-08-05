@@ -408,6 +408,10 @@ private:
 
 class SessionController : public SessionNavigation {
 public:
+	std::optional<int64> dialogId;
+	std::optional<bool> showExclude;
+	bool shadowBan = false;
+
 	SessionController(
 		not_null<Main::Session*> session,
 		not_null<Controller*> window);
