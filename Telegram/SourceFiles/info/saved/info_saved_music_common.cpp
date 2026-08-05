@@ -39,7 +39,6 @@ namespace {
 	const auto name = Ui::Text::FormatSongNameFor(document);
 
 	return {
-		.msgId = message->fullId(),
 		.name = name,
 		.title = name.composedName().title,
 		.performer = name.composedName().performer,
@@ -88,6 +87,7 @@ void SetupSavedMusic(
 						divider->entity(),
 						DocumentMusicButtonData(document, item),
 						color,
+						item->fullId(),
 						[window = controller, peer]
 						{
 							window->showSection(Info::Saved::MakeMusic(peer));

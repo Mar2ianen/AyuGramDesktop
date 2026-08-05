@@ -30,7 +30,12 @@ struct ResultCover
 class AyuMusicButton final : public Ui::RippleButton
 {
 public:
-	AyuMusicButton(QWidget *parent, MusicButtonData data, std::optional<QColor> overrideBg, Fn<void()> handler);
+	AyuMusicButton(
+		QWidget *parent,
+		MusicButtonData data,
+		std::optional<QColor> overrideBg,
+		FullMsgId msgId,
+		Fn<void()> handler);
 	~AyuMusicButton();
 
 	void updateData(MusicButtonData data);
@@ -40,7 +45,7 @@ public:
 	}
 
 private:
-	void downloadAndMakeCover(FullMsgId msgId);
+	void downloadAndMakeCover();
 	void makeCover();
 
 	void paintEvent(QPaintEvent *e) override;
@@ -56,6 +61,7 @@ private:
 	QString _titleText;
 
 	std::optional<QColor> _overrideBg;
+	FullMsgId _msgId;
 
 };
 

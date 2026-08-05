@@ -179,6 +179,7 @@ AyuMusicButton::AyuMusicButton(
 	QWidget *parent,
 	MusicButtonData data,
 	std::optional<QColor> overrideBg,
+	FullMsgId msgId,
 	Fn<void()> handler)
 	  : RippleButton(parent, st::infoMusicButtonRipple)
 	  , _performer(std::make_unique<Ui::FlatLabel>(
@@ -190,7 +191,8 @@ AyuMusicButton::AyuMusicButton(
 		  data.title,
 		  st::defaultFlatLabel))
 	  , _mediaView(data.mediaView)
-	  , _overrideBg(overrideBg) {
+	  , _overrideBg(overrideBg)
+	  , _msgId(msgId) {
 	_performerText = data.performer;
 	_titleText = data.title;
 	rpl::combine(
@@ -205,7 +207,7 @@ AyuMusicButton::AyuMusicButton(
 	_title->setAttribute(Qt::WA_TransparentForMouseEvents);
 	_performer->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-	downloadAndMakeCover(data.msgId);
+		 downloadAndMakeCover();
 
 	setClickedCallback(std::move(handler));
 }
@@ -218,19 +220,19 @@ void AyuMusicButton::updateData(MusicButtonData data) {
 	_performerText = data.performer;
 	_titleText = data.title;
 	_mediaView = data.mediaView;
-	downloadAndMakeCover(data.msgId);
+	 downloadAndMakeCover();
 
 	resizeToWidth(widthNoMargins());
 }
 
-void AyuMusicButton::downloadAndMakeCover(FullMsgId msgId) {
+void AyuMusicButton::downloadAndMakeCover() {
 	if (_mediaView && _mediaView->owner()->isSongWithCover() && !_mediaView->thumbnail()) {
 		const auto settings = &_mediaView->owner()->session().settings().autoDownload();
 		// Data::AutoDownload::Type::Music always returns false
 		if (settings->shouldDownload(Data::AutoDownload::Source::User,
 									 Data::AutoDownload::Type::File,
 									 _mediaView->owner()->size)) {
-			_mediaView->thumbnailWanted(Data::FileOrigin(msgId));
+			_mediaView->thumbnailWanted(Data::FileOrigin(_msgId));
 			_mediaView->owner()->owner().session().downloaderTaskFinished(
 			) | rpl::take_while([=]
 			{
