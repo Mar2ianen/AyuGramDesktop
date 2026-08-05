@@ -428,7 +428,7 @@ void Widget::resizeEvent(QResizeEvent *e) {
 
 	auto contentWidth = width();
 
-	auto newScrollTop = _scroll->scrollTop() + topDelta();
+	auto newScrollTop = _scroll->scrollTop() + _topDelta;
 	_fixedBar->resizeToWidth(contentWidth);
 	_fixedBarShadow->resize(contentWidth, st::lineWidth);
 
