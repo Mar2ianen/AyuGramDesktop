@@ -89,9 +89,6 @@ MessagePreview::MessagePreview(
 	}, TextWithEntities{ u"You need to go outside and touch some grass..."_q },
 	MTP_messageMediaEmpty());
 
-	messageItem->setDeleted();
-	messageItem->markDeletedAnimated();
-
 	_state->item = AdminLog::OwnedItem(
 		_state->delegate.get(),
 		messageItem);

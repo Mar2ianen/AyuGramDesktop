@@ -180,15 +180,15 @@ AyuMusicButton::AyuMusicButton(
 	MusicButtonData data,
 	std::optional<QColor> overrideBg,
 	Fn<void()> handler)
-	: RippleButton(parent, st::infoMusicButtonRipple)
+	  : RippleButton(parent, st::infoMusicButtonRipple)
 	  , _performer(std::make_unique<Ui::FlatLabel>(
 		  this,
 		  data.performer,
-		  st::infoMusicButtonPerformer))
+		  st::defaultFlatLabel))
 	  , _title(std::make_unique<Ui::FlatLabel>(
 		  this,
 		  data.title,
-		  st::infoMusicButtonTitle))
+		  st::defaultFlatLabel))
 	  , _mediaView(data.mediaView)
 	  , _overrideBg(overrideBg) {
 	_performerText = data.performer;
@@ -252,7 +252,7 @@ void AyuMusicButton::makeCover() {
 		[=, mediaView = _mediaView, performerText = _performerText, titleText = _titleText, overrideBg = _overrideBg]()
 		{
 			const auto &settings = AyuSettings::getInstance();
-			const auto &font = st::infoMusicButtonTitle.style.font;
+			const auto &font = st::defaultFlatLabel.style.font;
 			const auto skip = st::normalFont->spacew / 2;
 			const auto size = font->height + skip + font->height;
 
@@ -326,7 +326,7 @@ void AyuMusicButton::paintEvent(QPaintEvent *e) {
 
 	auto p = Painter(this);
 
-	const auto &font = st::infoMusicButtonTitle.style.font;
+	const auto &font = st::defaultFlatLabel.style.font;
 	const auto skip = st::normalFont->spacew / 2;
 	const auto size = font->height + skip + font->height;
 

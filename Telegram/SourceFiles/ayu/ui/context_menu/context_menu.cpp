@@ -248,9 +248,6 @@ void AddAyuGramActions(PeerData *peerData,
 					tr::ayu_ViewFiltersMenuText(tr::now),
 					[=]
 					{
-						sessionController->dialogId = getDialogIdFromPeer(peerData);
-						sessionController->showExclude = true;
-						sessionController->shadowBan = false;
 						sessionController->showSettings(Settings::AyuFiltersList::Id());
 					},
 					&st::menuIconAddToFolder);
@@ -872,7 +869,7 @@ void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 		[=]
 		{
 			readHistory(item);
-			if (item->media() && item->media()->ttlSeconds() <= 0 && item->unsupportedTTL() <= 0 && !item->out()) {
+			if (item->media() && item->media()->ttlSeconds() <= 0 && !item->out()) {
 				const auto ids = MTP_vector<MTPint>(1, MTP_int(item->id));
 				if (const auto channel = item->history()->peer->asChannel()) {
 					item->history()->session().api().request(MTPchannels_ReadMessageContents(
@@ -896,7 +893,7 @@ void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 }
 
 void AddBurnAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
-	if (!item->media() || (item->media()->ttlSeconds() <= 0 && item->unsupportedTTL() <= 0) || item->out() ||
+	if (!item->media() || item->media()->ttlSeconds() <= 0 || item->out() ||
 		!item->hasUnreadMediaFlag()) {
 		return;
 	}
