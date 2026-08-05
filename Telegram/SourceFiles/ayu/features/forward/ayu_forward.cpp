@@ -14,6 +14,7 @@
 #include "base/unixtime.h"
 #include "core/application.h"
 #include "data/data_changes.h"
+#include "data/data_chat.h"
 #include "data/data_document.h"
 #include "data/data_peer.h"
 #include "data/data_photo.h"
@@ -224,14 +225,23 @@ bool isAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items) {
 }
 
 bool isAyuForwardNeeded(not_null<HistoryItem*> item) {
-	if (item->isDeleted() || item->isAyuNoForwards() || item->unsupportedTTL() || (item->media() && item->media()->ttlSeconds())) {
+	const auto noForwards = [](PeerData *peer) {
+		return peer && peer->asChat() && peer->asChat()->isAyuNoForwards();
+	};
+	if (item->isEmpty()
+		|| noForwards(item->from())
+		|| noForwards(item->history()->peer)
+		|| (item->media() && item->media()->ttlSeconds())) {
 		return true;
 	}
 	return false;
 }
 
 bool isFullAyuForwardNeeded(not_null<HistoryItem*> item) {
-	return item->from()->isAyuNoForwards() || item->history()->peer->isAyuNoForwards();
+	const auto noForwards = [](PeerData *peer) {
+		return peer && peer->asChat() && peer->asChat()->isAyuNoForwards();
+	};
+	return noForwards(item->from()) || noForwards(item->history()->peer);
 }
 
 struct ForwardChunk

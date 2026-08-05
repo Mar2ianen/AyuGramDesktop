@@ -58,7 +58,7 @@ Fn<void()> ClearDeletedMessagesHandler(not_null<Window::SessionController*> cont
 				for (const auto &block : peer->owner().history(peer)->blocks) {
 					for (const auto &view : block->messages) {
 						const auto item = view->data();
-						if (item->isDeleted() && (!topicId || (item->topicRootId().bare == topicId))) {
+						if (item->isEmpty() && (!topicId || (item->topicRootId().bare == topicId))) {
 							items.push_back(item);
 						}
 					}
@@ -858,7 +858,7 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 }
 
 void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
-	if (!item->isHistoryEntry() || item->isLocal() || item->out() || item->isDeleted() || item->history()->peer->isSelf()) {
+	if (!item->isHistoryEntry() || item->isLocal() || item->out() || item->isEmpty() || item->history()->peer->isSelf()) {
 		return;
 	}
 

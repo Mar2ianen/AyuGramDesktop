@@ -8573,8 +8573,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_sr_languages_column_native" = "Native name";
 "lng_sr_languages_column_name" = "Language name";
 
-// Keys finished
-
 // AyuGram keys generated
 "ayu_AyuPreferences" = "AyuGram Preferences";
 "ayu_DocsText" = "Documentation";

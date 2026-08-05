@@ -1030,7 +1030,7 @@ static bool prependPseudoReplyImpl(
 		return false;
 	}
 	const auto replyItem = session->data().message(replyTo.messageId);
-	if (!replyItem || !replyItem->isDeleted()) {
+	if (!replyItem || !replyItem->isEmpty()) {
 		return false;
 	}
 	const auto shortify = [&](const QString &text, int maxLength) {

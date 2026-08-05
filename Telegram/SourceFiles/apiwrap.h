@@ -154,6 +154,7 @@ public:
 	[[nodiscard]] Main::Session &session() const;
 	[[nodiscard]] Storage::Account &local() const;
 	[[nodiscard]] Api::Updates &updates() const;
+	[[nodiscard]] TaskQueue *fileLoader() const { return _fileLoader.get(); }
 
 	void applyUpdates(
 		const MTPUpdates &updates,
