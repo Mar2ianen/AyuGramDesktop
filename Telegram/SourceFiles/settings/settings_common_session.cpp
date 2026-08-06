@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ui/settings/settings_filters.h"
+#include "ayu/ui/settings/settings_main.h"
 
 
 namespace Settings {
@@ -23,7 +24,8 @@ bool HasMenu(Type type) {
 		|| (type == MainId())
 		|| (type == ChatId())
 		|| (type == Experimental::Id())
-		|| (type == AyuFiltersId());
+		|| (type == AyuFiltersId())
+		|| (type == AyuMainId());
 }
 
 } // namespace Settings

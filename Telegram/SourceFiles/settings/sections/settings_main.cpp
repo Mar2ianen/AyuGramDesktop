@@ -58,6 +58,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_power_saving.h"
 #include "settings/sections/settings_premium.h"
 #include "settings/sections/settings_privacy_security.h"
+#include "ayu/ui/settings/settings_main.h"
 #include "settings/settings_scale_preview.h"
 #include "storage/localstorage.h"
 #include "ui/basic_click_handlers.h"
@@ -391,6 +392,13 @@ void BuildSectionButtons(SectionBuilder &builder) {
 		.targetSection = ChatId(),
 		.icon = { &st::menuIconChatBubble },
 		.keywords = { u"themes"_q, u"appearance"_q, u"stickers"_q },
+	});
+
+	builder.addSectionButton({
+		.title = rpl::single(QString("AyuGram")),
+		.targetSection = AyuMain::Id(),
+		.icon = { &st::menuIconPremium },
+		.keywords = { u"ayu"_q, u"ghost"_q, u"customization"_q },
 	});
 
 	{ // Folders
